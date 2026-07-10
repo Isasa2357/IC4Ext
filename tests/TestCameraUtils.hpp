@@ -25,17 +25,13 @@ inline const char* Env(const std::string& name)
 
 inline int EnvInt(const char* name, int fallback)
 {
-    if (const char* value = Env(name)) {
-        return std::atoi(value);
-    }
+    if (const char* value = Env(name)) return std::atoi(value);
     return fallback;
 }
 
 inline double EnvDouble(const char* name, double fallback)
 {
-    if (const char* value = Env(name)) {
-        return std::atof(value);
-    }
+    if (const char* value = Env(name)) return std::atof(value);
     return fallback;
 }
 
@@ -48,9 +44,7 @@ inline unsigned CameraCooldownMs()
 inline void SleepAfterCameraAccess()
 {
     const unsigned ms = CameraCooldownMs();
-    if (ms > 0) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(ms));
-    }
+    if (ms > 0) std::this_thread::sleep_for(std::chrono::milliseconds(ms));
 }
 
 class CameraAccessCooldown final
@@ -99,24 +93,38 @@ inline bool RequireCameraCount(std::size_t required)
 
 inline std::filesystem::path CameraJsonForIndex(int cameraIndex)
 {
-    const std::string indexed = std::string("IC4EXT_TEST_IC4_JSON_") + std::to_string(cameraIndex);
-    if (const char* value = Env(indexed)) {
-        return value;
-    }
-    if (const char* value = Env("IC4EXT_TEST_IC4_JSON")) {
-        return value;
-    }
+    const std::string indexed =
+        std::string("IC4EXT_TEST_IC4_JSON_") + std::to_string(cameraIndex);
+    if (const char* value = Env(indexed)) return value;
+    if (const char* value = Env("IC4EXT_TEST_IC4_JSON")) return value;
     return {};
 }
 
-inline IC4Ext::CameraCaptureConfig MakeCameraConfig(const char* shaderBackend, int cameraIndex)
+inline std::size_t CameraJsonDeviceIndex(int cameraIndex)
+{
+    const std::string indexed =
+        std::string("IC4EXT_TEST_IC4_JSON_DEVICE_INDEX_") + std::to_string(cameraIndex);
+    if (const char* value = Env(indexed)) {
+        return static_cast<std::size_t>(std::max(0, std::atoi(value)));
+    }
+    if (const char* value = Env("IC4EXT_TEST_IC4_JSON_DEVICE_INDEX")) {
+        return static_cast<std::size_t>(std::max(0, std::atoi(value)));
+    }
+
+    // A shared IC Capture state file commonly contains a single devices[0].state
+    // entry that is intentionally applied to every identical camera.
+    return 0;
+}
+
+inline IC4Ext::CameraCaptureConfig MakeCameraConfig(const char* shaderBackend,
+                                                     int cameraIndex)
 {
     IC4Ext::CameraCaptureConfig config;
 
     const auto jsonPath = CameraJsonForIndex(cameraIndex);
     if (!jsonPath.empty()) {
         config.ic4StateJson.path = jsonPath;
-        config.ic4StateJson.deviceIndex = static_cast<std::size_t>(std::max(cameraIndex, 0));
+        config.ic4StateJson.deviceIndex = CameraJsonDeviceIndex(cameraIndex);
     } else {
         IC4Ext::CameraPixelFormat fmt = IC4Ext::CameraPixelFormat::BGR8;
         if (const char* text = Env("IC4EXT_TEST_FORMAT")) {
@@ -133,11 +141,16 @@ inline IC4Ext::CameraCaptureConfig MakeCameraConfig(const char* shaderBackend, i
     if (height > 0) config.streamRequest.height = height;
     if (fps > 0.0) config.streamRequest.fps = fps;
 
-    if (const char* ox = Env("IC4EXT_TEST_OFFSET_X")) config.streamRequest.offsetX = std::atoi(ox);
-    if (const char* oy = Env("IC4EXT_TEST_OFFSET_Y")) config.streamRequest.offsetY = std::atoi(oy);
+    if (const char* ox = Env("IC4EXT_TEST_OFFSET_X")) {
+        config.streamRequest.offsetX = std::atoi(ox);
+    }
+    if (const char* oy = Env("IC4EXT_TEST_OFFSET_Y")) {
+        config.streamRequest.offsetY = std::atoi(oy);
+    }
 
     config.outputSpec.outputFormat = IC4Ext::GpuFrameFormat::RGBA8;
-    config.shaderConfig.shaderDirectory = std::filesystem::current_path() / "shaders" / shaderBackend;
+    config.shaderConfig.shaderDirectory =
+        std::filesystem::current_path() / "shaders" / shaderBackend;
     return config;
 }
 
