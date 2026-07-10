@@ -35,6 +35,7 @@ struct D3D12CameraFrame
     D3D12ReadyToken ready;
     FrameTiming timing;
     FrameFormatMetadata format;
+    FrameChunkMetadata chunkMetadata;
 };
 
 struct D3D12IndexedCameraFrame
