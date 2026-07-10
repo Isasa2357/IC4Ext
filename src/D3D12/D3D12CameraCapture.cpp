@@ -2,16 +2,19 @@
 #include "IC4Ext/D3D12/D3D12FenceManager.hpp"
 #include "IC4Ext/D3D12/D3D12FrameConverter.hpp"
 #include "IC4Ext/Core/IC4ChunkMetadata.hpp"
+#include "../Core/IC4PerformanceUtil.hpp"
 
 #include <ic4/ic4.h>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <fstream>
 #include <memory>
 #include <optional>
 #include <sstream>
+#include <string>
 #include <utility>
 #include <variant>
 
@@ -168,7 +171,9 @@ CameraCaptureConfig BuildEffectiveConfigFromJson(CameraCaptureConfig config, Err
 
     if (!config.streamRequest.forceRequestedFormat) {
         CameraPixelFormat jsonFmt{};
-        if (TryGetJsonPixelFormat(*state, jsonFmt)) config.streamRequest.requestedFormat = jsonFmt;
+        if (TryGetJsonPixelFormat(*state, jsonFmt)) {
+            config.streamRequest.requestedFormat = jsonFmt;
+        }
     }
 
     int jsonInt = 0;
@@ -176,7 +181,9 @@ CameraCaptureConfig BuildEffectiveConfigFromJson(CameraCaptureConfig config, Err
     if (config.streamRequest.height <= 0 && TryGetJsonInt(*state, "Height", jsonInt)) config.streamRequest.height = jsonInt;
 
     double jsonDouble = 0.0;
-    if (config.streamRequest.fps <= 0.0 && TryGetJsonDouble(*state, "AcquisitionFrameRate", jsonDouble)) config.streamRequest.fps = jsonDouble;
+    if (config.streamRequest.fps <= 0.0 && TryGetJsonDouble(*state, "AcquisitionFrameRate", jsonDouble)) {
+        config.streamRequest.fps = jsonDouble;
+    }
     return config;
 }
 
@@ -199,6 +206,7 @@ bool SetPropertyFromJsonScalar(ic4::PropertyMap& props,
         ok = false;
         outError = MakeError(ErrorCode::IC4Error, "SetPropertyFromJsonScalar", JsonErrorMessage(ex));
     }
+
     if (!ok) {
         outError = MakeError(ErrorCode::IC4Error,
                              "SetPropertyFromJsonScalar / " + propertyName,
@@ -218,15 +226,20 @@ bool ApplyJsonStateObject(ic4::PropertyMap& props,
         outError = MakeError(ErrorCode::InvalidArgument, "ApplyJsonStateObject", "state is not a JSON object");
         return false;
     }
+
     for (const auto& item : state.items()) {
         const std::string& propertyName = item.key();
         const Json& value = item.value();
+
         if (value.is_object()) {
             if (!applyNestedSelectorStates) continue;
+
             const bool hasSelectedValue = value.contains("(Value)") && value.at("(Value)").is_string();
             std::string selectedValue = hasSelectedValue ? value.at("(Value)").get<std::string>() : std::string{};
+
             for (const auto& selectorEntry : value.items()) {
                 if (selectorEntry.key() == "(Value)" || !selectorEntry.value().is_object()) continue;
+
                 ic4::Error selectorErr;
                 if (!props.setValue(propertyName, selectorEntry.key(), selectorErr)) {
                     outError = MakeError(ErrorCode::IC4Error,
@@ -235,11 +248,13 @@ bool ApplyJsonStateObject(ic4::PropertyMap& props,
                     if (strict) return false;
                     continue;
                 }
+
                 for (const auto& nestedProp : selectorEntry.value().items()) {
                     if (nestedProp.value().is_object()) continue;
                     if (!SetPropertyFromJsonScalar(props, nestedProp.key(), nestedProp.value(), strict, outError) && strict) return false;
                 }
             }
+
             if (hasSelectedValue) {
                 ic4::Error restoreErr;
                 if (!props.setValue(propertyName, selectedValue, restoreErr)) {
@@ -251,6 +266,7 @@ bool ApplyJsonStateObject(ic4::PropertyMap& props,
             }
             continue;
         }
+
         if (!SetPropertyFromJsonScalar(props, propertyName, value, strict, outError) && strict) return false;
     }
     return true;
@@ -260,21 +276,37 @@ std::optional<ic4::DeviceInfo> ResolveDevice(const IC4DeviceSelector& selector, 
 {
     ic4::Error err;
     auto devices = ic4::DeviceEnum::enumDevices(err);
-    if (err.isError()) { outError = MakeError(ErrorCode::IC4Error, "ResolveDevice / enumDevices", IC4ErrorMessage(err)); return std::nullopt; }
-    if (devices.empty()) { outError = MakeError(ErrorCode::IC4Error, "ResolveDevice", "No IC4 camera devices were found"); return std::nullopt; }
+    if (err.isError()) {
+        outError = MakeError(ErrorCode::IC4Error, "ResolveDevice / enumDevices", IC4ErrorMessage(err));
+        return std::nullopt;
+    }
+    if (devices.empty()) {
+        outError = MakeError(ErrorCode::IC4Error, "ResolveDevice", "No IC4 camera devices were found");
+        return std::nullopt;
+    }
+
     if (!selector.serial.empty()) {
-        for (const auto& d : devices) { ic4::Error e; if (d.serial(e) == selector.serial && !e.isError()) return d; }
+        for (const auto& d : devices) {
+            ic4::Error e;
+            if (d.serial(e) == selector.serial && !e.isError()) return d;
+        }
         outError = MakeError(ErrorCode::IC4Error, "ResolveDevice / serial", "No device with serial " + selector.serial);
         return std::nullopt;
     }
     if (!selector.uniqueName.empty()) {
-        for (const auto& d : devices) { ic4::Error e; if (d.uniqueName(e) == selector.uniqueName && !e.isError()) return d; }
+        for (const auto& d : devices) {
+            ic4::Error e;
+            if (d.uniqueName(e) == selector.uniqueName && !e.isError()) return d;
+        }
         outError = MakeError(ErrorCode::IC4Error, "ResolveDevice / uniqueName", "No device with uniqueName " + selector.uniqueName);
         return std::nullopt;
     }
     if (selector.deviceIndex >= 0) {
         const auto idx = static_cast<std::size_t>(selector.deviceIndex);
-        if (idx >= devices.size()) { outError = MakeError(ErrorCode::IC4Error, "ResolveDevice / deviceIndex", "deviceIndex is out of range"); return std::nullopt; }
+        if (idx >= devices.size()) {
+            outError = MakeError(ErrorCode::IC4Error, "ResolveDevice / deviceIndex", "deviceIndex is out of range");
+            return std::nullopt;
+        }
         return devices[idx];
     }
     return devices.front();
@@ -330,11 +362,21 @@ public:
     mutable std::mutex statsMutex;
     mutable std::mutex controlMutex;
     CameraCaptureStats stats;
+    Internal::FrameTimingPerformanceTracker timingTracker;
     ErrorInfo lastError;
     bool connected = false;
 
-    void setError(ErrorCode code, const std::string& where, const std::string& message) { lastError = MakeError(code, where, message); }
-    CameraCaptureStats getStats() const { std::lock_guard<std::mutex> lock(statsMutex); return stats; }
+    void setError(ErrorCode code, const std::string& where, const std::string& message)
+    {
+        lastError = MakeError(code, where, message);
+    }
+
+    CameraCaptureStats getStats() const
+    {
+        std::lock_guard<std::mutex> lock(statsMutex);
+        return stats;
+    }
+
     void incrementReceived() { std::lock_guard<std::mutex> lock(statsMutex); ++stats.receivedBuffers; }
     void incrementDropped(std::uint64_t n = 1) { std::lock_guard<std::mutex> lock(statsMutex); stats.droppedPendingBuffers += n; }
     void incrementReadFrames() { std::lock_guard<std::mutex> lock(statsMutex); ++stats.readFrames; }
@@ -371,6 +413,7 @@ public:
                 pending.timing.frameNumber = md.device_frame_number;
                 pending.timing.deviceTimestampNs = md.device_timestamp_ns;
             }
+            timingTracker.update(pending.timing);
 
             {
                 std::lock_guard<std::mutex> controlLock(controlMutex);
@@ -399,13 +442,30 @@ public:
                 } else {
                     pendingFrames.push_back(std::move(pending));
                     if (config.maxPendingBuffers > 0) {
-                        while (pendingFrames.size() > config.maxPendingBuffers) { pendingFrames.pop_front(); incrementDropped(); }
+                        while (pendingFrames.size() > config.maxPendingBuffers) {
+                            pendingFrames.pop_front();
+                            incrementDropped();
+                        }
                     }
                 }
             }
             incrementReceived();
             pendingCv.notify_one();
         }
+    }
+
+    CameraPerformanceSnapshot performanceSnapshot()
+    {
+        CameraPerformanceSnapshot snapshot;
+        snapshot.sampledTime = std::chrono::steady_clock::now();
+        snapshot.captureStats = getStats();
+        snapshot.timing = timingTracker.snapshot();
+        if (grabber && (*grabber)) {
+            snapshot.streamStatistics = Internal::ReadStreamStatistics(grabber.get());
+            std::lock_guard<std::mutex> lock(controlMutex);
+            snapshot.temperatures = Internal::ReadDeviceTemperatures(grabber.get());
+        }
+        return snapshot;
     }
 
     std::optional<ic4::PropertyMap> getPropertyMap(const char* where)
@@ -491,12 +551,22 @@ D3D12CameraCapture::D3D12CameraCapture()
 {
 }
 
-D3D12CameraCapture::~D3D12CameraCapture() { close(); }
-D3D12CameraCapture::D3D12CameraCapture(D3D12CameraCapture&& other) noexcept { moveFrom(std::move(other)); }
+D3D12CameraCapture::~D3D12CameraCapture()
+{
+    close();
+}
+
+D3D12CameraCapture::D3D12CameraCapture(D3D12CameraCapture&& other) noexcept
+{
+    moveFrom(std::move(other));
+}
 
 D3D12CameraCapture& D3D12CameraCapture::operator=(D3D12CameraCapture&& other) noexcept
 {
-    if (this != &other) { close(); moveFrom(std::move(other)); }
+    if (this != &other) {
+        close();
+        moveFrom(std::move(other));
+    }
     return *this;
 }
 
@@ -534,10 +604,7 @@ bool D3D12CameraCapture::open(const IC4DeviceSelector& selector,
         setError(ErrorCode::InvalidArgument, "D3D12CameraCapture::open", "D3D12 backend must be created from D3D12Helper D3D12Core. Use D3D12BackendContext::FromCore(...).");
         return false;
     }
-    if (!IsSupportedConversion(impl_->config.streamRequest.requestedFormat, impl_->config.outputSpec.outputFormat)) {
-        setError(ErrorCode::UnsupportedFormat, "D3D12CameraCapture::open", std::string("Unsupported conversion: ") + ToString(impl_->config.streamRequest.requestedFormat) + " -> " + ToString(impl_->config.outputSpec.outputFormat));
-        return false;
-    }
+    if (!IsSupportedConversion(impl_->config.streamRequest.requestedFormat, impl_->config.outputSpec.outputFormat)) { setError(ErrorCode::UnsupportedFormat, "D3D12CameraCapture::open", std::string("Unsupported conversion: ") + ToString(impl_->config.streamRequest.requestedFormat) + " -> " + ToString(impl_->config.outputSpec.outputFormat)); return false; }
 
     impl_->device = impl_->backend.device;
     impl_->queue = impl_->backend.commandQueue;
@@ -570,11 +637,7 @@ bool D3D12CameraCapture::open(const IC4DeviceSelector& selector,
     impl_->queueSink = ic4::QueueSink::create(impl_->listener, sinkConfig, err);
     if (err.isError() || !impl_->queueSink) { setError(ErrorCode::IC4Error, "D3D12CameraCapture::open / QueueSink::create", IC4ErrorMessage(err)); close(); return false; }
 
-    if (!impl_->grabber->streamSetup(impl_->queueSink, ic4::StreamSetupOption::AcquisitionStart, err)) {
-        setError(ErrorCode::IC4Error, "D3D12CameraCapture::open / streamSetup", impl_->lastError ? impl_->lastError.message : IC4ErrorMessage(err));
-        close();
-        return false;
-    }
+    if (!impl_->grabber->streamSetup(impl_->queueSink, ic4::StreamSetupOption::AcquisitionStart, err)) { setError(ErrorCode::IC4Error, "D3D12CameraCapture::open / streamSetup", impl_->lastError ? impl_->lastError.message : IC4ErrorMessage(err)); close(); return false; }
 
     opened_.store(true);
     return true;
@@ -600,6 +663,7 @@ void D3D12CameraCapture::close() noexcept
     impl_->listener.reset();
     impl_->converter.reset();
     impl_->fenceManager.reset();
+    impl_->timingTracker.reset();
     impl_->device = nullptr;
     impl_->queue = nullptr;
 }
@@ -617,15 +681,8 @@ D3D12ReadResult D3D12CameraCapture::read(const CameraReadOptions& options)
     PendingIC4Frame pending;
     {
         std::unique_lock<std::mutex> lock(impl_->pendingMutex);
-        const bool hasFrame = impl_->pendingCv.wait_for(lock, std::chrono::milliseconds(options.timeoutMs), [&] {
-            return !impl_->pendingFrames.empty() || !opened_.load();
-        });
-        if (!hasFrame || impl_->pendingFrames.empty()) {
-            impl_->incrementReadTimeouts();
-            result.error = MakeError(ErrorCode::Timeout, "D3D12CameraCapture::read", "Read timed out");
-            lastError_ = result.error;
-            return result;
-        }
+        const bool hasFrame = impl_->pendingCv.wait_for(lock, std::chrono::milliseconds(options.timeoutMs), [&] { return !impl_->pendingFrames.empty() || !opened_.load(); });
+        if (!hasFrame || impl_->pendingFrames.empty()) { impl_->incrementReadTimeouts(); result.error = MakeError(ErrorCode::Timeout, "D3D12CameraCapture::read", "Read timed out"); lastError_ = result.error; return result; }
         if (options.mode == ReadMode::LatestFrame) {
             if (impl_->pendingFrames.size() > 1) impl_->incrementDropped(static_cast<std::uint64_t>(impl_->pendingFrames.size() - 1));
             pending = std::move(impl_->pendingFrames.back());
@@ -750,21 +807,13 @@ bool D3D12CameraCapture::setRoi(int width, int height, int offsetX, int offsetY)
     if (!setIC4Property("Height", height)) return false;
     if (!setIC4Property("OffsetX", offsetX)) return false;
     if (!setIC4Property("OffsetY", offsetY)) return false;
-    if (impl_) {
-        impl_->config.streamRequest.width = width;
-        impl_->config.streamRequest.height = height;
-        impl_->config.streamRequest.offsetX = offsetX;
-        impl_->config.streamRequest.offsetY = offsetY;
-    }
+    if (impl_) { impl_->config.streamRequest.width = width; impl_->config.streamRequest.height = height; impl_->config.streamRequest.offsetX = offsetX; impl_->config.streamRequest.offsetY = offsetY; }
     return true;
 }
 
 bool D3D12CameraCapture::setPixelFormat(CameraPixelFormat fmt)
 {
-    if (!IsSupportedConversion(fmt, impl_ ? impl_->config.outputSpec.outputFormat : GpuFrameFormat::RGBA8)) {
-        setError(ErrorCode::UnsupportedFormat, "D3D12CameraCapture::setPixelFormat", std::string("Unsupported conversion: ") + ToString(fmt));
-        return false;
-    }
+    if (!IsSupportedConversion(fmt, impl_ ? impl_->config.outputSpec.outputFormat : GpuFrameFormat::RGBA8)) { setError(ErrorCode::UnsupportedFormat, "D3D12CameraCapture::setPixelFormat", std::string("Unsupported conversion: ") + ToString(fmt)); return false; }
     const bool ok = setIC4Property("PixelFormat", std::string(ToString(fmt)));
     if (ok && impl_) impl_->config.streamRequest.requestedFormat = fmt;
     return ok;
@@ -774,6 +823,12 @@ CameraCaptureStats D3D12CameraCapture::stats() const
 {
     if (!impl_) return {};
     return impl_->getStats();
+}
+
+CameraPerformanceSnapshot D3D12CameraCapture::performance()
+{
+    if (!impl_) return {};
+    return impl_->performanceSnapshot();
 }
 
 } // namespace IC4Ext
