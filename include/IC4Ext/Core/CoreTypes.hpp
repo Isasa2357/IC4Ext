@@ -1,0 +1,59 @@
+#pragma once
+
+#include "IC4Ext/Config.hpp"
+#include "IC4Ext/Core/Error.hpp"
+
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+
+namespace IC4Ext {
+
+struct FrameTiming
+{
+    std::uint64_t frameNumber = 0;
+    std::uint64_t deviceTimestampNs = 0;
+    std::chrono::steady_clock::time_point hostReceivedTime{};
+};
+
+struct FrameFormatMetadata
+{
+    CameraPixelFormat requestedFormat = CameraPixelFormat::BayerRG8;
+    CameraPixelFormat actualInputFormat = CameraPixelFormat::BayerRG8;
+    GpuFrameFormat outputFormat = GpuFrameFormat::RGBA8;
+    int width = 0;
+    int height = 0;
+    std::size_t inputRowPitchBytes = 0;
+};
+
+struct CameraCaptureStats
+{
+    std::uint64_t receivedBuffers = 0;
+    std::uint64_t droppedPendingBuffers = 0;
+    std::uint64_t readFrames = 0;
+    std::uint64_t readTimeouts = 0;
+    std::uint64_t conversionFailures = 0;
+};
+
+struct CameraThreadStats
+{
+    std::uint64_t readFrames = 0;
+    std::uint64_t readTimeouts = 0;
+    std::uint64_t readErrors = 0;
+    std::uint64_t pushedFrames = 0;
+    std::uint64_t pushFailures = 0;
+    std::uint64_t copiedFrames = 0;
+    std::uint64_t copyFailures = 0;
+    std::uint64_t noOutputDrops = 0;
+};
+
+struct FrameSyncStats
+{
+    std::uint64_t inputFrames = 0;
+    std::uint64_t emittedSets = 0;
+    std::uint64_t ignoredFrames = 0;
+    std::uint64_t droppedFrames = 0;
+    std::uint64_t pushFailures = 0;
+};
+
+} // namespace IC4Ext

@@ -1,0 +1,107 @@
+# Build directories
+build/
+out/
+cmake-build-*/
+_build/
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+DartConfiguration.tcl
+install_manifest.txt
+compile_commands.json
+CMakeUserPresets.json
+
+# FetchContent / package manager outputs
+_deps/
+vcpkg_installed/
+packages/
+.nuget/
+
+# Visual Studio generated files
+.vs/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.props
+*.targets
+*.opensdf
+*.sdf
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+ipch/
+
+# Visual Studio build outputs
+Debug/
+Release/
+RelWithDebInfo/
+MinSizeRel/
+x64/
+x86/
+Win32/
+ARM/
+ARM64/
+[Bb]in/
+[Oo]bj/
+
+# Compiler and linker outputs
+*.obj
+*.o
+*.lo
+*.lib
+*.a
+*.dll
+*.pdb
+*.idb
+*.ilk
+*.exp
+*.exe
+*.out
+*.app
+*.so
+*.dylib
+*.dSYM/
+
+# Ninja / Make generated files
+.ninja_deps
+.ninja_log
+build.ninja
+rules.ninja
+Makefile
+
+# Test and coverage outputs
+*.log
+*.trx
+*.coverage
+*.coveragexml
+*.gcda
+*.gcno
+*.profraw
+*.profdata
+
+# Runtime copied assets and generated shader binaries
+*.cso
+dxcompiler.dll
+dxil.dll
+ic4core.dll
+
+# Editors and OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local environment files
+.env
+.env.*
+local_settings.*
