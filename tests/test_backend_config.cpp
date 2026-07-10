@@ -1,6 +1,29 @@
 #include <IC4Ext/IC4Ext.hpp>
 #include <cassert>
 #include <iostream>
+#include <string>
+#include <variant>
+
+namespace {
+
+const IC4Ext::IC4PropertyOverride* FindOverride(const IC4Ext::CameraCaptureConfig& config,
+                                                const std::string& name)
+{
+    for (const auto& ov : config.propertyOverrides) {
+        if (ov.propertyName == name) return &ov;
+    }
+    return nullptr;
+}
+
+std::string GetStringOverride(const IC4Ext::CameraCaptureConfig& config,
+                              const std::string& name)
+{
+    const auto* ov = FindOverride(config, name);
+    assert(ov);
+    return std::get<std::string>(ov->value);
+}
+
+} // namespace
 
 int main()
 {
@@ -13,6 +36,27 @@ int main()
     assert(!perfDefaults.timing.hasDeviceInterval);
     assert(!perfDefaults.timing.hasHostInterval);
     assert(perfDefaults.temperatures.empty());
+
+    IC4Ext::CameraCaptureConfig hwSyncConfig;
+    IC4Ext::ConfigureHardwareTriggerSync(hwSyncConfig, "Line1", "FrameStart", "RisingEdge");
+    assert(IC4Ext::ToString(IC4Ext::CameraSyncMode::HardwareTrigger) == std::string("HardwareTrigger"));
+    assert(GetStringOverride(hwSyncConfig, "TriggerSelector") == "FrameStart");
+    assert(GetStringOverride(hwSyncConfig, "TriggerMode") == "On");
+    assert(GetStringOverride(hwSyncConfig, "TriggerSource") == "Line1");
+    assert(GetStringOverride(hwSyncConfig, "TriggerActivation") == "RisingEdge");
+    assert(GetStringOverride(hwSyncConfig, "ExposureAuto") == "Off");
+
+    IC4Ext::CameraCaptureConfig swSyncConfig;
+    IC4Ext::ConfigureSoftwareTriggerSync(swSyncConfig);
+    assert(IC4Ext::ToString(IC4Ext::CameraSyncMode::SoftwareTrigger) == std::string("SoftwareTrigger"));
+    assert(GetStringOverride(swSyncConfig, "TriggerSelector") == "FrameStart");
+    assert(GetStringOverride(swSyncConfig, "TriggerMode") == "On");
+    assert(GetStringOverride(swSyncConfig, "TriggerSource") == "Software");
+
+    IC4Ext::CameraCaptureConfig noSyncConfig;
+    IC4Ext::ConfigureNoSync(noSyncConfig);
+    assert(IC4Ext::ToString(IC4Ext::CameraSyncMode::None) == std::string("None"));
+    assert(GetStringOverride(noSyncConfig, "TriggerMode") == "Off");
 
 #if IC4EXT_ENABLE_D3D11
     IC4Ext::D3D11ReadyToken d3d11Invalid;
