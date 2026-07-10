@@ -2,7 +2,7 @@
 
 IC4Ext は、The Imaging Source **IC Imaging Control 4 SDK** で取得したカメラフレームを、Direct3D 11 / Direct3D 12 の GPU texture として扱うための C++17 ライブラリです。
 
-IC4 の `QueueSink` から受け取った CPU 側 image buffer を D3D11 / D3D12 texture へ変換し、同期用 metadata、非同期 capture thread、frame sync、DummyCameraCapture、IC Capture 4 から export した JSON 設定、GPU frame の CPU readback を提供します。
+IC4 の `QueueSink` から受け取った CPU 側 image buffer を D3D11 / D3D12 texture へ変換し、同期用 metadata、chunk metadata、非同期 capture thread、frame sync、DummyCameraCapture、IC Capture 4 から export した JSON 設定、GPU frame の CPU readback を提供します。
 
 このパッケージの現在位置は **D3DHelper v1.12.1 対応版**です。D3D12 backend は raw D3D12 object だけを渡す初期化ではなく、`D3D12CoreLib::D3D12Core` から作った `D3D12BackendContext` を使います。D3D11 backend も、可能な範囲で D3D11Helper の resource / view / compute pipeline / binding / fence / transfer helper に寄せています。
 
@@ -17,9 +17,9 @@ IC4 の `QueueSink` から受け取った CPU 側 image buffer を D3D11 / D3D12
 | DummyCameraCapture | D3D11 / D3D12 ともに実装済み |
 | FrameSyncThread | D3D11 / D3D12 ともに実装済み |
 | CpuFrame / readback | D3D11 / D3D12 ともに実装済み |
+| chunk metadata | 実装済み。取得できる chunk のみ `has*` flag 付きで保持 |
 | D3D12-D3D11 interop | 未実装 |
 | 10/12/16bit pixel format | 未実装。必要になったら追加予定 |
-| chunk metadata | 未実装。現状は frame number / timestamp のみ保持 |
 
 ## Features
 
@@ -28,6 +28,7 @@ IC4 の `QueueSink` から受け取った CPU 側 image buffer を D3D11 / D3D12
 - `CameraStreamRequest::requestedFormat` を IC4 device の `PixelFormat` property として設定
 - `ReadMode::LatestFrame` / `ReadMode::NextFrame` を選択可能
 - `FrameTiming` として `frameNumber` / `deviceTimestampNs` / `hostReceivedTime` を保持
+- `FrameChunkMetadata` として `ChunkBlockId` / `ChunkExposureTime` / `ChunkGain` / IMX174 / MultiFrameSet 系 chunk を保持
 - D3D11.4 fence (`ID3D11Fence`) / D3D12 fence による GPU ready token
 - `.hlsl` runtime compile と `.cso` load の両対応
 - IC Capture 4 公式ソフトから export した JSON (`devices[n].state`) を `nlohmann/json` で読み込み
@@ -68,7 +69,7 @@ BGRa8   -> RGBA8
 
 ### CPU readback formats
 
-`D3D11CameraFrame` / `D3D12CameraFrame` は readback により共通の `CpuFrame` に変換できます。
+`D3D11CameraFrame` / `D3D12CameraFrame` は readback により共通の `CpuFrame` に変換できます。`FrameChunkMetadata` も GPU frame から `CpuFrame` へ引き継がれます。
 
 ```txt
 Gray8
@@ -78,6 +79,20 @@ BGR8
 ```
 
 `CpuFrame` は常に tight packed です。
+
+### Chunk metadata
+
+IC4 chunk data が有効な場合、`FrameChunkMetadata` に以下を保持します。取得できなかった項目は対応する `has*` flag が `false` のままです。
+
+```txt
+ChunkBlockId
+ChunkExposureTime
+ChunkGain
+ChunkIMX174FrameId
+ChunkIMX174FrameSet
+ChunkMultiFrameSetId
+ChunkMultiFrameSetFrameId
+```
 
 ### 未対応 format
 
@@ -134,139 +149,57 @@ nlohmann/json single header
 
 ## Build
 
-### CMD: current project layout
+### CMD: existing clone
 
-以下は、このフォルダでビルドするための CMD 用コマンドです。`cd` は入れていません。現在の作業ディレクトリが IC4Ext の root、つまり `CMakeLists.txt` がある場所である前提です。
-
-IC4 SDK は installer が登録する `%IC4PATH%` を使います。`IC4PATH` が設定されていれば CMake 側でも自動的に `IC4_SDK_ROOT` の既定値になりますが、コマンドでは明示的に `-DIC4_SDK_ROOT="%IC4PATH%"` を渡しています。
-
-`IC4EXT_DXC_RUNTIME_DIR` は `dxcompiler.dll` と `dxil.dll` があるディレクトリを指してください。現在の作業フォルダに `packages/Microsoft.Direct3D.DXC.1.9.2602.24/build/native/bin/x64` がある場合は、このまま使えます。
+以下は、既に clone 済みで、現在の作業ディレクトリが IC4Ext の root、つまり `CMakeLists.txt` がある場所である前提です。`exit /b` は入れていません。
 
 ```bat
-set "IC4_SDK_ROOT=%IC4PATH%"
-set "PATH=%IC4_SDK_ROOT%\bin\x64;%PATH%"
+git pull
 
+set "IC4_SDK_ROOT="
 set "IC4EXT_DXC_RUNTIME_DIR=%CD%\packages\Microsoft.Direct3D.DXC.1.9.2602.24\build\native\bin\x64"
-set "PATH=%IC4EXT_DXC_RUNTIME_DIR%;%PATH%"
+set "PATH=%IC4PATH%\bin\x64;%IC4EXT_DXC_RUNTIME_DIR%;%PATH%"
 
-echo IC4PATH=%IC4PATH%
-echo IC4_SDK_ROOT=%IC4_SDK_ROOT%
-echo IC4EXT_DXC_RUNTIME_DIR=%IC4EXT_DXC_RUNTIME_DIR%
-
-dir "%IC4_SDK_ROOT%\include\ic4\ic4.h"
-dir "%IC4EXT_DXC_RUNTIME_DIR%\dxcompiler.dll"
-dir "%IC4EXT_DXC_RUNTIME_DIR%\dxil.dll"
-
-where cmake
-where ctest
-where cl
+nuget install Microsoft.Direct3D.DXC -Version 1.9.2602.24 -OutputDirectory packages
 
 rmdir /s /q out\build\default 2>nul
 
-cmake -S . -B out\build\default ^
-  -DIC4_SDK_ROOT="%IC4_SDK_ROOT%" ^
-  -DIC4EXT_BUILD_SAMPLES=ON ^
-  -DIC4EXT_BUILD_TESTS=ON ^
-  -DIC4EXT_ENABLE_D3D11=ON ^
-  -DIC4EXT_ENABLE_D3D12=ON ^
-  -DIC4EXT_DXC_RUNTIME_DIR="%IC4EXT_DXC_RUNTIME_DIR%" ^
-  -DD3D11HELPER_DXC_RUNTIME_DIR="%IC4EXT_DXC_RUNTIME_DIR%" ^
-  -DD3D12HELPER_DXC_RUNTIME_DIR="%IC4EXT_DXC_RUNTIME_DIR%" ^
-  -DIC4EXT_D3D11HELPER_GIT_TAG=v1.12.1 ^
-  -DIC4EXT_D3D12HELPER_GIT_TAG=v1.12.1 ^
-  -DIC4EXT_FETCH_DEPENDENCIES=ON ^
-  -DIC4EXT_FETCH_D3D11HELPER=ON ^
-  -DIC4EXT_FETCH_D3D12HELPER=ON ^
-  -DIC4EXT_FETCH_THREADKIT=ON ^
-  -DIC4EXT_FETCH_NLOHMANN_JSON=ON
+cmake -S . -B out\build\default -G "Visual Studio 17 2022" -A x64 -DIC4EXT_BUILD_SAMPLES:BOOL=ON -DIC4EXT_BUILD_TESTS:BOOL=ON -DIC4EXT_ENABLE_D3D11:BOOL=ON -DIC4EXT_ENABLE_D3D12:BOOL=ON "-DIC4EXT_DXC_RUNTIME_DIR:PATH=%IC4EXT_DXC_RUNTIME_DIR%" "-DD3D11HELPER_DXC_RUNTIME_DIR:PATH=%IC4EXT_DXC_RUNTIME_DIR%" "-DD3D12HELPER_DXC_RUNTIME_DIR:PATH=%IC4EXT_DXC_RUNTIME_DIR%" -DIC4EXT_D3D11HELPER_GIT_TAG:STRING=v1.12.1 -DIC4EXT_D3D12HELPER_GIT_TAG:STRING=v1.12.1 -DIC4EXT_FETCH_DEPENDENCIES:BOOL=ON -DIC4EXT_FETCH_D3D11HELPER:BOOL=ON -DIC4EXT_FETCH_D3D12HELPER:BOOL=ON -DIC4EXT_FETCH_THREADKIT:BOOL=ON -DIC4EXT_FETCH_NLOHMANN_JSON:BOOL=ON
 
-cmake --build out\build\default --config Debug
-
-ctest --test-dir out\build\default -C Debug --output-on-failure
+cmake --build out\build\default --config Debug --parallel
 ```
 
-もし DXC のフォルダ名が `packages` ではなく `package` の場合は、この行だけ変えてください。
+### Test labels
 
-```bat
-set "IC4EXT_DXC_RUNTIME_DIR=%CD%\package\Microsoft.Direct3D.DXC.1.9.2602.24\build\native\bin\x64"
-```
-
-### Backend selection
-
-両方有効:
-
-```bat
--DIC4EXT_ENABLE_D3D11=ON ^
--DIC4EXT_ENABLE_D3D12=ON
-```
-
-D3D11 のみ:
-
-```bat
--DIC4EXT_ENABLE_D3D11=ON ^
--DIC4EXT_ENABLE_D3D12=OFF
-```
-
-D3D12 のみ:
-
-```bat
--DIC4EXT_ENABLE_D3D11=OFF ^
--DIC4EXT_ENABLE_D3D12=ON
-```
-
-## Tests
-
-CTest target:
+テストは CTest label で3分類しています。
 
 ```txt
-test_core
-test_cpu_frame
-test_backend_config
-test_d3d11_frame_readback
-test_single_camera_smoke
-test_d3d12_core
-test_d3d12_shader_reference
-test_d3d12_dummy_camera_capture
-test_d3d12_frame_readback
-test_d3d12_frame_sync_thread
-test_d3d12_shader_compile
+no_camera   : カメラなしで実行可能
+camera1     : IC4 camera 1台が必要
+camera2plus : IC4 camera 2台以上が必要。FrameSyncThread 向け
 ```
-
-`test_single_camera_smoke` は IC4 compatible camera が接続されている場合に意味を持ちます。カメラや GPU/device が利用できない環境では、一部テストは skip return code `77` を返す設計です。
-
-## Samples
-
-### D3D11 camera log
 
 ```bat
-out\build\default\samples\SingleCameraLog\Debug\SingleCameraLog.exe ^
-  --device-index 0 --width 1920 --height 1080 --fps 60 ^
-  --format BGR8 --output RGBA8 --frames 300
+ctest --test-dir out\build\default -C Debug -L no_camera --output-on-failure
+
+set "IC4EXT_TEST_CAMERA_COOLDOWN_MS=5000"
+ctest --test-dir out\build\default -C Debug -L camera1 --output-on-failure
+ctest --test-dir out\build\default -C Debug -L camera2plus --output-on-failure
 ```
 
-### D3D12 camera log
+カメラの既定フォーマットで open できない場合は、JSON または format 指定を使います。
 
 ```bat
-out\build\default\samples\SingleCameraLogD3D12\Debug\SingleCameraLogD3D12.exe ^
-  --device-index 0 --width 1920 --height 1080 --fps 60 ^
-  --format BGR8 --output RGBA8 --frames 300
+set "IC4EXT_TEST_IC4_JSON=C:\path\to\camera_state.json"
+set "IC4EXT_TEST_FORMAT=BGR8"
 ```
 
-### D3D11 readback
+2台テストで個別 JSON を使う場合:
 
 ```bat
-out\build\default\samples\SingleCameraReadback\Debug\SingleCameraReadback.exe ^
-  --device-index 0 --output RGBA8 --cpu-format BGR8 --out frame.ppm
+set "IC4EXT_TEST_IC4_JSON_0=C:\path\to\camera0.json"
+set "IC4EXT_TEST_IC4_JSON_1=C:\path\to\camera1.json"
 ```
-
-### D3D12 readback
-
-```bat
-out\build\default\samples\SingleCameraReadbackD3D12\Debug\SingleCameraReadbackD3D12.exe ^
-  --device-index 0 --output RGBA8 --cpu-format BGR8 --out frame_d3d12.ppm
-```
-
-Gray output の場合は PGM、RGB/BGR/RGBA output の場合は PPM に保存します。
 
 ## Minimal usage
 
@@ -299,7 +232,10 @@ int main()
     auto result = cap.read(IC4Ext::ReadMode::LatestFrame);
     if (result) {
         result.frame.ready.wait();
-        // result.frame.texture / result.frame.srv を利用する。
+        if (result.frame.chunkMetadata.hasExposureTime) {
+            const double exposureUs = result.frame.chunkMetadata.exposureTimeUs;
+            (void)exposureUs;
+        }
     }
 }
 ```
@@ -334,7 +270,10 @@ int main()
     auto result = cap.read(IC4Ext::ReadMode::LatestFrame);
     if (result) {
         result.frame.ready.wait();
-        // result.frame.texture / result.frame.srv を利用する。
+        if (result.frame.chunkMetadata.hasGain) {
+            const double gain = result.frame.chunkMetadata.gain;
+            (void)gain;
+        }
     }
 }
 ```
@@ -348,6 +287,7 @@ readback.initialize(backend);
 
 if (readback.readback(gpuFrame, IC4Ext::CpuFrameFormat::BGR8, cpu)) {
     // cpu.data は tight packed BGR8。
+    // cpu.chunkMetadata は gpuFrame.chunkMetadata から引き継がれる。
 }
 ```
 
@@ -400,7 +340,6 @@ Some properties, especially `Width`, `Height`, `OffsetX`, `OffsetY`, and `PixelF
 
 - D3D12-D3D11 shared texture interop は未実装です。
 - 10/12/16bit packed / unpacked pixel format は未実装です。
-- chunk metadata は未実装です。現状は `device_frame_number` / `device_timestamp_ns` を `FrameTiming` に保持します。
 - 高 fps 長時間運用、実カメラ readback 統合テスト、readback resource reuse 最適化は今後の確認事項です。
 
 ## License
