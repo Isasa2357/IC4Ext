@@ -1,6 +1,7 @@
 #include "IC4Ext/D3D12/D3D12CameraCapture.hpp"
 #include "IC4Ext/D3D12/D3D12FenceManager.hpp"
 #include "IC4Ext/D3D12/D3D12FrameConverter.hpp"
+#include "IC4Ext/Core/IC4ChunkMetadata.hpp"
 
 #include <ic4/ic4.h>
 #include <nlohmann/json.hpp>
@@ -8,10 +9,11 @@
 #include <algorithm>
 #include <chrono>
 #include <fstream>
-#include <sstream>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <utility>
+#include <variant>
 
 namespace IC4Ext {
 
@@ -84,7 +86,6 @@ CameraPixelFormat FromIC4PixelFormat(ic4::PixelFormat fmt, CameraPixelFormat fal
     default: return fallback;
     }
 }
-
 
 using Json = nlohmann::json;
 
@@ -159,36 +160,23 @@ bool TryGetJsonPixelFormat(const Json& state, CameraPixelFormat& out)
 
 CameraCaptureConfig BuildEffectiveConfigFromJson(CameraCaptureConfig config, ErrorInfo& outError)
 {
-    if (!config.ic4StateJson.enabled()) {
-        return config;
-    }
-
+    if (!config.ic4StateJson.enabled()) return config;
     auto root = LoadJsonFile(config.ic4StateJson.path, outError);
     if (!root) return config;
-
     const Json* state = FindIC4StateObject(*root, config.ic4StateJson.deviceIndex, outError);
     if (!state) return config;
 
     if (!config.streamRequest.forceRequestedFormat) {
         CameraPixelFormat jsonFmt{};
-        if (TryGetJsonPixelFormat(*state, jsonFmt)) {
-            config.streamRequest.requestedFormat = jsonFmt;
-        }
+        if (TryGetJsonPixelFormat(*state, jsonFmt)) config.streamRequest.requestedFormat = jsonFmt;
     }
 
     int jsonInt = 0;
-    if (config.streamRequest.width <= 0 && TryGetJsonInt(*state, "Width", jsonInt)) {
-        config.streamRequest.width = jsonInt;
-    }
-    if (config.streamRequest.height <= 0 && TryGetJsonInt(*state, "Height", jsonInt)) {
-        config.streamRequest.height = jsonInt;
-    }
+    if (config.streamRequest.width <= 0 && TryGetJsonInt(*state, "Width", jsonInt)) config.streamRequest.width = jsonInt;
+    if (config.streamRequest.height <= 0 && TryGetJsonInt(*state, "Height", jsonInt)) config.streamRequest.height = jsonInt;
 
     double jsonDouble = 0.0;
-    if (config.streamRequest.fps <= 0.0 && TryGetJsonDouble(*state, "AcquisitionFrameRate", jsonDouble)) {
-        config.streamRequest.fps = jsonDouble;
-    }
-
+    if (config.streamRequest.fps <= 0.0 && TryGetJsonDouble(*state, "AcquisitionFrameRate", jsonDouble)) config.streamRequest.fps = jsonDouble;
     return config;
 }
 
@@ -201,25 +189,16 @@ bool SetPropertyFromJsonScalar(ic4::PropertyMap& props,
     ic4::Error err;
     bool ok = true;
     try {
-        if (value.is_boolean()) {
-            ok = props.setValue(propertyName, value.get<bool>(), err);
-        } else if (value.is_number_integer()) {
-            ok = props.setValue(propertyName, value.get<std::int64_t>(), err);
-        } else if (value.is_number_unsigned()) {
-            ok = props.setValue(propertyName, static_cast<std::int64_t>(value.get<std::uint64_t>()), err);
-        } else if (value.is_number_float()) {
-            ok = props.setValue(propertyName, value.get<double>(), err);
-        } else if (value.is_string()) {
-            ok = props.setValue(propertyName, value.get<std::string>(), err);
-        } else {
-            // Arrays, nulls and object values are not direct scalar properties. They are skipped.
-            return true;
-        }
+        if (value.is_boolean()) ok = props.setValue(propertyName, value.get<bool>(), err);
+        else if (value.is_number_integer()) ok = props.setValue(propertyName, value.get<std::int64_t>(), err);
+        else if (value.is_number_unsigned()) ok = props.setValue(propertyName, static_cast<std::int64_t>(value.get<std::uint64_t>()), err);
+        else if (value.is_number_float()) ok = props.setValue(propertyName, value.get<double>(), err);
+        else if (value.is_string()) ok = props.setValue(propertyName, value.get<std::string>(), err);
+        else return true;
     } catch (const std::exception& ex) {
         ok = false;
         outError = MakeError(ErrorCode::IC4Error, "SetPropertyFromJsonScalar", JsonErrorMessage(ex));
     }
-
     if (!ok) {
         outError = MakeError(ErrorCode::IC4Error,
                              "SetPropertyFromJsonScalar / " + propertyName,
@@ -239,23 +218,15 @@ bool ApplyJsonStateObject(ic4::PropertyMap& props,
         outError = MakeError(ErrorCode::InvalidArgument, "ApplyJsonStateObject", "state is not a JSON object");
         return false;
     }
-
     for (const auto& item : state.items()) {
         const std::string& propertyName = item.key();
         const Json& value = item.value();
-
         if (value.is_object()) {
             if (!applyNestedSelectorStates) continue;
-
             const bool hasSelectedValue = value.contains("(Value)") && value.at("(Value)").is_string();
             std::string selectedValue = hasSelectedValue ? value.at("(Value)").get<std::string>() : std::string{};
-
-            // IC Capture 4 writes selector-dependent values as e.g.
-            // TriggerSelector.FrameStart.TriggerMode. To apply them through IC4,
-            // select each entry, write its direct scalar child values, then restore (Value).
             for (const auto& selectorEntry : value.items()) {
                 if (selectorEntry.key() == "(Value)" || !selectorEntry.value().is_object()) continue;
-
                 ic4::Error selectorErr;
                 if (!props.setValue(propertyName, selectorEntry.key(), selectorErr)) {
                     outError = MakeError(ErrorCode::IC4Error,
@@ -264,15 +235,11 @@ bool ApplyJsonStateObject(ic4::PropertyMap& props,
                     if (strict) return false;
                     continue;
                 }
-
                 for (const auto& nestedProp : selectorEntry.value().items()) {
                     if (nestedProp.value().is_object()) continue;
-                    if (!SetPropertyFromJsonScalar(props, nestedProp.key(), nestedProp.value(), strict, outError) && strict) {
-                        return false;
-                    }
+                    if (!SetPropertyFromJsonScalar(props, nestedProp.key(), nestedProp.value(), strict, outError) && strict) return false;
                 }
             }
-
             if (hasSelectedValue) {
                 ic4::Error restoreErr;
                 if (!props.setValue(propertyName, selectedValue, restoreErr)) {
@@ -284,10 +251,7 @@ bool ApplyJsonStateObject(ic4::PropertyMap& props,
             }
             continue;
         }
-
-        if (!SetPropertyFromJsonScalar(props, propertyName, value, strict, outError) && strict) {
-            return false;
-        }
+        if (!SetPropertyFromJsonScalar(props, propertyName, value, strict, outError) && strict) return false;
     }
     return true;
 }
@@ -296,37 +260,21 @@ std::optional<ic4::DeviceInfo> ResolveDevice(const IC4DeviceSelector& selector, 
 {
     ic4::Error err;
     auto devices = ic4::DeviceEnum::enumDevices(err);
-    if (err.isError()) {
-        outError = MakeError(ErrorCode::IC4Error, "ResolveDevice / enumDevices", IC4ErrorMessage(err));
-        return std::nullopt;
-    }
-    if (devices.empty()) {
-        outError = MakeError(ErrorCode::IC4Error, "ResolveDevice", "No IC4 camera devices were found");
-        return std::nullopt;
-    }
-
+    if (err.isError()) { outError = MakeError(ErrorCode::IC4Error, "ResolveDevice / enumDevices", IC4ErrorMessage(err)); return std::nullopt; }
+    if (devices.empty()) { outError = MakeError(ErrorCode::IC4Error, "ResolveDevice", "No IC4 camera devices were found"); return std::nullopt; }
     if (!selector.serial.empty()) {
-        for (const auto& d : devices) {
-            ic4::Error e;
-            if (d.serial(e) == selector.serial && !e.isError()) return d;
-        }
+        for (const auto& d : devices) { ic4::Error e; if (d.serial(e) == selector.serial && !e.isError()) return d; }
         outError = MakeError(ErrorCode::IC4Error, "ResolveDevice / serial", "No device with serial " + selector.serial);
         return std::nullopt;
     }
     if (!selector.uniqueName.empty()) {
-        for (const auto& d : devices) {
-            ic4::Error e;
-            if (d.uniqueName(e) == selector.uniqueName && !e.isError()) return d;
-        }
+        for (const auto& d : devices) { ic4::Error e; if (d.uniqueName(e) == selector.uniqueName && !e.isError()) return d; }
         outError = MakeError(ErrorCode::IC4Error, "ResolveDevice / uniqueName", "No device with uniqueName " + selector.uniqueName);
         return std::nullopt;
     }
     if (selector.deviceIndex >= 0) {
         const auto idx = static_cast<std::size_t>(selector.deviceIndex);
-        if (idx >= devices.size()) {
-            outError = MakeError(ErrorCode::IC4Error, "ResolveDevice / deviceIndex", "deviceIndex is out of range");
-            return std::nullopt;
-        }
+        if (idx >= devices.size()) { outError = MakeError(ErrorCode::IC4Error, "ResolveDevice / deviceIndex", "deviceIndex is out of range"); return std::nullopt; }
         return devices[idx];
     }
     return devices.front();
@@ -337,6 +285,7 @@ struct PendingIC4Frame
     std::shared_ptr<ic4::ImageBuffer> buffer;
     FrameTiming timing;
     FrameFormatMetadata format;
+    FrameChunkMetadata chunkMetadata;
 };
 
 } // namespace
@@ -348,23 +297,14 @@ public:
     {
     public:
         explicit Listener(Impl* owner) : owner_(owner) {}
-
         bool sinkConnected(ic4::QueueSink& sink, const ic4::ImageType& imageType, size_t minBuffersRequired) override
         {
             (void)sink;
             (void)minBuffersRequired;
             return owner_ ? owner_->onSinkConnected(imageType) : false;
         }
-
-        void sinkDisconnected(ic4::QueueSink& sink) override
-        {
-            (void)sink;
-        }
-
-        void framesQueued(ic4::QueueSink& sink) override
-        {
-            if (owner_) owner_->onFramesQueued(sink);
-        }
+        void sinkDisconnected(ic4::QueueSink& sink) override { (void)sink; }
+        void framesQueued(ic4::QueueSink& sink) override { if (owner_) owner_->onFramesQueued(sink); }
     private:
         Impl* owner_ = nullptr;
     };
@@ -393,44 +333,13 @@ public:
     ErrorInfo lastError;
     bool connected = false;
 
-    Impl() = default;
-
-    void setError(ErrorCode code, const std::string& where, const std::string& message)
-    {
-        lastError = MakeError(code, where, message);
-    }
-
-    CameraCaptureStats getStats() const
-    {
-        std::lock_guard<std::mutex> lock(statsMutex);
-        return stats;
-    }
-
-    void incrementReceived()
-    {
-        std::lock_guard<std::mutex> lock(statsMutex);
-        ++stats.receivedBuffers;
-    }
-    void incrementDropped(std::uint64_t n = 1)
-    {
-        std::lock_guard<std::mutex> lock(statsMutex);
-        stats.droppedPendingBuffers += n;
-    }
-    void incrementReadFrames()
-    {
-        std::lock_guard<std::mutex> lock(statsMutex);
-        ++stats.readFrames;
-    }
-    void incrementReadTimeouts()
-    {
-        std::lock_guard<std::mutex> lock(statsMutex);
-        ++stats.readTimeouts;
-    }
-    void incrementConversionFailures()
-    {
-        std::lock_guard<std::mutex> lock(statsMutex);
-        ++stats.conversionFailures;
-    }
+    void setError(ErrorCode code, const std::string& where, const std::string& message) { lastError = MakeError(code, where, message); }
+    CameraCaptureStats getStats() const { std::lock_guard<std::mutex> lock(statsMutex); return stats; }
+    void incrementReceived() { std::lock_guard<std::mutex> lock(statsMutex); ++stats.receivedBuffers; }
+    void incrementDropped(std::uint64_t n = 1) { std::lock_guard<std::mutex> lock(statsMutex); stats.droppedPendingBuffers += n; }
+    void incrementReadFrames() { std::lock_guard<std::mutex> lock(statsMutex); ++stats.readFrames; }
+    void incrementReadTimeouts() { std::lock_guard<std::mutex> lock(statsMutex); ++stats.readTimeouts; }
+    void incrementConversionFailures() { std::lock_guard<std::mutex> lock(statsMutex); ++stats.conversionFailures; }
 
     bool onSinkConnected(const ic4::ImageType& imageType)
     {
@@ -448,7 +357,6 @@ public:
         for (;;) {
             ic4::Error cancelErr;
             if (sink.isCancelRequested(cancelErr)) break;
-
             ic4::Error err;
             auto buffer = sink.popOutputBuffer(err);
             if (!buffer) break;
@@ -462,6 +370,11 @@ public:
             if (!metaErr.isError()) {
                 pending.timing.frameNumber = md.device_frame_number;
                 pending.timing.deviceTimestampNs = md.device_timestamp_ns;
+            }
+
+            {
+                std::lock_guard<std::mutex> controlLock(controlMutex);
+                pending.chunkMetadata = Internal::ReadChunkMetadata(grabber.get(), pending.buffer);
             }
 
             ic4::Error typeErr;
@@ -486,10 +399,7 @@ public:
                 } else {
                     pendingFrames.push_back(std::move(pending));
                     if (config.maxPendingBuffers > 0) {
-                        while (pendingFrames.size() > config.maxPendingBuffers) {
-                            pendingFrames.pop_front();
-                            incrementDropped();
-                        }
+                        while (pendingFrames.size() > config.maxPendingBuffers) { pendingFrames.pop_front(); incrementDropped(); }
                     }
                 }
             }
@@ -500,99 +410,37 @@ public:
 
     std::optional<ic4::PropertyMap> getPropertyMap(const char* where)
     {
-        if (!grabber || !(*grabber)) {
-            setError(ErrorCode::IC4Error, where, "Grabber is not initialized");
-            return std::nullopt;
-        }
-
+        if (!grabber || !(*grabber)) { setError(ErrorCode::IC4Error, where, "Grabber is not initialized"); return std::nullopt; }
         ic4::Error err;
         ic4::PropertyMap props = grabber->devicePropertyMap(err);
-        if (err.isError() || !props) {
-            setError(ErrorCode::IC4Error, where, IC4ErrorMessage(err));
-            return std::nullopt;
-        }
+        if (err.isError() || !props) { setError(ErrorCode::IC4Error, where, IC4ErrorMessage(err)); return std::nullopt; }
         return props;
     }
 
     bool applyJsonStateConfig()
     {
         if (!config.ic4StateJson.enabled()) return true;
-
         ErrorInfo parseError;
         auto root = LoadJsonFile(config.ic4StateJson.path, parseError);
-        if (!root) {
-            lastError = parseError;
-            return false;
-        }
-
+        if (!root) { lastError = parseError; return false; }
         const Json* state = FindIC4StateObject(*root, config.ic4StateJson.deviceIndex, parseError);
-        if (!state) {
-            lastError = parseError;
-            return false;
-        }
-
+        if (!state) { lastError = parseError; return false; }
         auto props = getPropertyMap("D3D12CameraCapture::applyJsonStateConfig / devicePropertyMap");
         if (!props) return false;
-
         ErrorInfo applyError;
-        const bool ok = ApplyJsonStateObject(*props,
-                                             *state,
-                                             config.ic4StateJson.strict,
-                                             config.ic4StateJson.applyNestedSelectorStates,
-                                             applyError);
+        const bool ok = ApplyJsonStateObject(*props, *state, config.ic4StateJson.strict, config.ic4StateJson.applyNestedSelectorStates, applyError);
         if (applyError) lastError = applyError;
         return ok;
     }
 
-    bool setProperty(const std::string& propertyName, bool value, const char* where)
+    template <typename T>
+    bool setPropertyValue(const std::string& propertyName, const T& value, const char* where)
     {
         std::lock_guard<std::mutex> lock(controlMutex);
         auto props = getPropertyMap(where);
         if (!props) return false;
         ic4::Error err;
-        if (!props->setValue(propertyName, value, err)) {
-            setError(ErrorCode::IC4Error, where, IC4ErrorMessage(err));
-            return false;
-        }
-        return true;
-    }
-
-    bool setProperty(const std::string& propertyName, std::int64_t value, const char* where)
-    {
-        std::lock_guard<std::mutex> lock(controlMutex);
-        auto props = getPropertyMap(where);
-        if (!props) return false;
-        ic4::Error err;
-        if (!props->setValue(propertyName, value, err)) {
-            setError(ErrorCode::IC4Error, where, IC4ErrorMessage(err));
-            return false;
-        }
-        return true;
-    }
-
-    bool setProperty(const std::string& propertyName, double value, const char* where)
-    {
-        std::lock_guard<std::mutex> lock(controlMutex);
-        auto props = getPropertyMap(where);
-        if (!props) return false;
-        ic4::Error err;
-        if (!props->setValue(propertyName, value, err)) {
-            setError(ErrorCode::IC4Error, where, IC4ErrorMessage(err));
-            return false;
-        }
-        return true;
-    }
-
-    bool setProperty(const std::string& propertyName, const std::string& value, const char* where)
-    {
-        std::lock_guard<std::mutex> lock(controlMutex);
-        auto props = getPropertyMap(where);
-        if (!props) return false;
-        ic4::Error err;
-        if (!props->setValue(propertyName, value, err)) {
-            setError(ErrorCode::IC4Error, where, IC4ErrorMessage(err));
-            return false;
-        }
+        if (!props->setValue(propertyName, value, err)) { setError(ErrorCode::IC4Error, where, IC4ErrorMessage(err)); return false; }
         return true;
     }
 
@@ -600,66 +448,31 @@ public:
     {
         auto props = getPropertyMap("D3D12CameraCapture::open / devicePropertyMap");
         if (!props) return false;
-
         ic4::Error err;
-
         const auto ic4Fmt = ToIC4PixelFormat(config.streamRequest.requestedFormat);
-        if (ic4Fmt == ic4::PixelFormat::Unspecified) {
-            setError(ErrorCode::UnsupportedFormat, "D3D12CameraCapture::open / PixelFormat", "Unsupported requestedFormat");
-            return false;
-        }
-        if (!props->setValue(ic4::PropId::PixelFormat, ic4Fmt, err)) {
-            setError(ErrorCode::IC4Error, "D3D12CameraCapture::open / PixelFormat", IC4ErrorMessage(err));
-            return false;
-        }
+        if (ic4Fmt == ic4::PixelFormat::Unspecified) { setError(ErrorCode::UnsupportedFormat, "D3D12CameraCapture::open / PixelFormat", "Unsupported requestedFormat"); return false; }
+        if (!props->setValue(ic4::PropId::PixelFormat, ic4Fmt, err)) { setError(ErrorCode::IC4Error, "D3D12CameraCapture::open / PixelFormat", IC4ErrorMessage(err)); return false; }
         if (config.streamRequest.offsetX || config.streamRequest.offsetY) {
-            if (!props->setValue(ic4::PropId::OffsetAutoCenter, "Off", err)) {
-                setError(ErrorCode::IC4Error, "D3D12CameraCapture::open / OffsetAutoCenter", IC4ErrorMessage(err));
-                return false;
-            }
+            if (!props->setValue(ic4::PropId::OffsetAutoCenter, "Off", err)) { setError(ErrorCode::IC4Error, "D3D12CameraCapture::open / OffsetAutoCenter", IC4ErrorMessage(err)); return false; }
         }
-        if (config.streamRequest.width > 0 && !props->setValue(ic4::PropId::Width, config.streamRequest.width, err)) {
-            setError(ErrorCode::IC4Error, "D3D12CameraCapture::open / Width", IC4ErrorMessage(err));
-            return false;
-        }
-        if (config.streamRequest.height > 0 && !props->setValue(ic4::PropId::Height, config.streamRequest.height, err)) {
-            setError(ErrorCode::IC4Error, "D3D12CameraCapture::open / Height", IC4ErrorMessage(err));
-            return false;
-        }
-        if (config.streamRequest.offsetX && !props->setValue(ic4::PropId::OffsetX, *config.streamRequest.offsetX, err)) {
-            setError(ErrorCode::IC4Error, "D3D12CameraCapture::open / OffsetX", IC4ErrorMessage(err));
-            return false;
-        }
-        if (config.streamRequest.offsetY && !props->setValue(ic4::PropId::OffsetY, *config.streamRequest.offsetY, err)) {
-            setError(ErrorCode::IC4Error, "D3D12CameraCapture::open / OffsetY", IC4ErrorMessage(err));
-            return false;
-        }
-        if (config.streamRequest.fps > 0.0 && !props->setValue(ic4::PropId::AcquisitionFrameRate, config.streamRequest.fps, err)) {
-            setError(ErrorCode::IC4Error, "D3D12CameraCapture::open / AcquisitionFrameRate", IC4ErrorMessage(err));
-            return false;
-        }
+        if (config.streamRequest.width > 0 && !props->setValue(ic4::PropId::Width, config.streamRequest.width, err)) { setError(ErrorCode::IC4Error, "D3D12CameraCapture::open / Width", IC4ErrorMessage(err)); return false; }
+        if (config.streamRequest.height > 0 && !props->setValue(ic4::PropId::Height, config.streamRequest.height, err)) { setError(ErrorCode::IC4Error, "D3D12CameraCapture::open / Height", IC4ErrorMessage(err)); return false; }
+        if (config.streamRequest.offsetX && !props->setValue(ic4::PropId::OffsetX, *config.streamRequest.offsetX, err)) { setError(ErrorCode::IC4Error, "D3D12CameraCapture::open / OffsetX", IC4ErrorMessage(err)); return false; }
+        if (config.streamRequest.offsetY && !props->setValue(ic4::PropId::OffsetY, *config.streamRequest.offsetY, err)) { setError(ErrorCode::IC4Error, "D3D12CameraCapture::open / OffsetY", IC4ErrorMessage(err)); return false; }
+        if (config.streamRequest.fps > 0.0 && !props->setValue(ic4::PropId::AcquisitionFrameRate, config.streamRequest.fps, err)) { setError(ErrorCode::IC4Error, "D3D12CameraCapture::open / AcquisitionFrameRate", IC4ErrorMessage(err)); return false; }
         return true;
     }
 
     bool applyPropertyOverrides()
     {
         if (config.propertyOverrides.empty()) return true;
-
         auto props = getPropertyMap("D3D12CameraCapture::open / propertyOverrides");
         if (!props) return false;
-
         for (const auto& ov : config.propertyOverrides) {
             ic4::Error err;
             bool ok = false;
-            std::visit([&](const auto& v) {
-                ok = props->setValue(ov.propertyName, v, err);
-            }, ov.value);
-            if (!ok) {
-                setError(ErrorCode::IC4Error,
-                         "D3D12CameraCapture::open / propertyOverride " + ov.propertyName,
-                         err.isError() ? IC4ErrorMessage(err) : "IC4 property setValue returned false");
-                return false;
-            }
+            std::visit([&](const auto& v) { ok = props->setValue(ov.propertyName, v, err); }, ov.value);
+            if (!ok) { setError(ErrorCode::IC4Error, "D3D12CameraCapture::open / propertyOverride " + ov.propertyName, err.isError() ? IC4ErrorMessage(err) : "IC4 property setValue returned false"); return false; }
         }
         return true;
     }
@@ -671,7 +484,6 @@ public:
         if (!applyExplicitStreamRequestProperties()) return false;
         return applyPropertyOverrides();
     }
-
 };
 
 D3D12CameraCapture::D3D12CameraCapture()
@@ -679,22 +491,12 @@ D3D12CameraCapture::D3D12CameraCapture()
 {
 }
 
-D3D12CameraCapture::~D3D12CameraCapture()
-{
-    close();
-}
-
-D3D12CameraCapture::D3D12CameraCapture(D3D12CameraCapture&& other) noexcept
-{
-    moveFrom(std::move(other));
-}
+D3D12CameraCapture::~D3D12CameraCapture() { close(); }
+D3D12CameraCapture::D3D12CameraCapture(D3D12CameraCapture&& other) noexcept { moveFrom(std::move(other)); }
 
 D3D12CameraCapture& D3D12CameraCapture::operator=(D3D12CameraCapture&& other) noexcept
 {
-    if (this != &other) {
-        close();
-        moveFrom(std::move(other));
-    }
+    if (this != &other) { close(); moveFrom(std::move(other)); }
     return *this;
 }
 
@@ -703,9 +505,7 @@ void D3D12CameraCapture::moveFrom(D3D12CameraCapture&& other) noexcept
     impl_ = std::move(other.impl_);
     opened_.store(other.opened_.load());
     other.opened_.store(false);
-    if (!other.impl_) {
-        other.impl_ = std::make_unique<Impl>();
-    }
+    if (!other.impl_) other.impl_ = std::make_unique<Impl>();
 }
 
 void D3D12CameraCapture::setError(ErrorCode code, const std::string& where, const std::string& message)
@@ -725,22 +525,15 @@ bool D3D12CameraCapture::open(const IC4DeviceSelector& selector,
 
     ErrorInfo effectiveConfigError;
     CameraCaptureConfig effectiveConfig = BuildEffectiveConfigFromJson(config, effectiveConfigError);
-    if (effectiveConfigError) {
-        lastError_ = effectiveConfigError;
-        impl_->lastError = effectiveConfigError;
-        return false;
-    }
+    if (effectiveConfigError) { lastError_ = effectiveConfigError; impl_->lastError = effectiveConfigError; return false; }
 
     impl_->config = effectiveConfig;
     impl_->backend = backend;
 
     if (!impl_->backend.resolve() || !impl_->backend.corePtr || !impl_->backend.queue) {
-        setError(ErrorCode::InvalidArgument,
-                 "D3D12CameraCapture::open",
-                 "D3D12 backend must be created from D3D12Helper D3D12Core. Use D3D12BackendContext::FromCore(...).");
+        setError(ErrorCode::InvalidArgument, "D3D12CameraCapture::open", "D3D12 backend must be created from D3D12Helper D3D12Core. Use D3D12BackendContext::FromCore(...).");
         return false;
     }
-
     if (!IsSupportedConversion(impl_->config.streamRequest.requestedFormat, impl_->config.outputSpec.outputFormat)) {
         setError(ErrorCode::UnsupportedFormat, "D3D12CameraCapture::open", std::string("Unsupported conversion: ") + ToString(impl_->config.streamRequest.requestedFormat) + " -> " + ToString(impl_->config.outputSpec.outputFormat));
         return false;
@@ -748,64 +541,34 @@ bool D3D12CameraCapture::open(const IC4DeviceSelector& selector,
 
     impl_->device = impl_->backend.device;
     impl_->queue = impl_->backend.commandQueue;
-    if (!impl_->device || !impl_->queue) {
-        setError(ErrorCode::D3D12Error, "D3D12CameraCapture::open", "D3D12 backend has null resolved device/queue");
-        return false;
-    }
+    if (!impl_->device || !impl_->queue) { setError(ErrorCode::D3D12Error, "D3D12CameraCapture::open", "D3D12 backend has null resolved device/queue"); return false; }
 
     impl_->fenceManager = std::make_unique<D3D12FenceManager>();
-    if (!impl_->fenceManager->initialize(impl_->backend)) {
-        setError(ErrorCode::D3D12Error, "D3D12CameraCapture::open / D3D12FenceManager", impl_->fenceManager->lastError().message);
-        return false;
-    }
+    if (!impl_->fenceManager->initialize(impl_->backend)) { setError(ErrorCode::D3D12Error, "D3D12CameraCapture::open / D3D12FenceManager", impl_->fenceManager->lastError().message); return false; }
 
     impl_->converter = std::make_unique<D3D12FrameConverter>();
-    if (!impl_->converter->initialize(impl_->backend, impl_->fenceManager.get(), impl_->config.shaderConfig)) {
-        setError(ErrorCode::D3D12Error, "D3D12CameraCapture::open / D3D12FrameConverter", impl_->converter->lastError().message);
-        return false;
-    }
+    if (!impl_->converter->initialize(impl_->backend, impl_->fenceManager.get(), impl_->config.shaderConfig)) { setError(ErrorCode::D3D12Error, "D3D12CameraCapture::open / D3D12FrameConverter", impl_->converter->lastError().message); return false; }
 
     impl_->ic4Context = SharedIC4Context();
-    if (!impl_->ic4Context->initialized()) {
-        setError(ErrorCode::IC4Error, "D3D12CameraCapture::open / initLibrary", "ic4::initLibrary failed");
-        return false;
-    }
+    if (!impl_->ic4Context->initialized()) { setError(ErrorCode::IC4Error, "D3D12CameraCapture::open / initLibrary", "ic4::initLibrary failed"); return false; }
 
     ErrorInfo resolveError;
     auto dev = ResolveDevice(selector, resolveError);
-    if (!dev) {
-        lastError_ = resolveError;
-        impl_->lastError = resolveError;
-        return false;
-    }
+    if (!dev) { lastError_ = resolveError; impl_->lastError = resolveError; return false; }
 
     ic4::Error err;
     impl_->grabber = std::make_unique<ic4::Grabber>(err);
-    if (err.isError() || !impl_->grabber || !(*impl_->grabber)) {
-        setError(ErrorCode::IC4Error, "D3D12CameraCapture::open / Grabber", IC4ErrorMessage(err));
-        return false;
-    }
-    if (!impl_->grabber->deviceOpen(*dev, err)) {
-        setError(ErrorCode::IC4Error, "D3D12CameraCapture::open / deviceOpen", IC4ErrorMessage(err));
-        return false;
-    }
+    if (err.isError() || !impl_->grabber || !(*impl_->grabber)) { setError(ErrorCode::IC4Error, "D3D12CameraCapture::open / Grabber", IC4ErrorMessage(err)); return false; }
+    if (!impl_->grabber->deviceOpen(*dev, err)) { setError(ErrorCode::IC4Error, "D3D12CameraCapture::open / deviceOpen", IC4ErrorMessage(err)); return false; }
 
-    if (!impl_->configureDeviceProperties()) {
-        lastError_ = impl_->lastError;
-        close();
-        return false;
-    }
+    if (!impl_->configureDeviceProperties()) { lastError_ = impl_->lastError; close(); return false; }
 
     impl_->listener = std::make_shared<Impl::Listener>(impl_.get());
     ic4::QueueSink::Config sinkConfig;
     sinkConfig.acceptedPixelFormats.push_back(ToIC4PixelFormat(impl_->config.streamRequest.requestedFormat));
     sinkConfig.maxOutputBuffers = (impl_->config.queuePolicy == FrameQueuePolicy::LatestOnly) ? 2u : 0u;
     impl_->queueSink = ic4::QueueSink::create(impl_->listener, sinkConfig, err);
-    if (err.isError() || !impl_->queueSink) {
-        setError(ErrorCode::IC4Error, "D3D12CameraCapture::open / QueueSink::create", IC4ErrorMessage(err));
-        close();
-        return false;
-    }
+    if (err.isError() || !impl_->queueSink) { setError(ErrorCode::IC4Error, "D3D12CameraCapture::open / QueueSink::create", IC4ErrorMessage(err)); close(); return false; }
 
     if (!impl_->grabber->streamSetup(impl_->queueSink, ic4::StreamSetupOption::AcquisitionStart, err)) {
         setError(ErrorCode::IC4Error, "D3D12CameraCapture::open / streamSetup", impl_->lastError ? impl_->lastError.message : IC4ErrorMessage(err));
@@ -821,21 +584,13 @@ void D3D12CameraCapture::close() noexcept
 {
     opened_.store(false);
     if (!impl_) return;
-
     try {
         ic4::Error err;
-        if (impl_->grabber && (*impl_->grabber) && impl_->grabber->isAcquisitionActive()) {
-            impl_->grabber->acquisitionStop(err);
-        }
-        if (impl_->grabber && (*impl_->grabber) && impl_->grabber->isStreaming()) {
-            impl_->grabber->streamStop(err);
-        }
-        if (impl_->grabber && (*impl_->grabber) && impl_->grabber->isDeviceOpen()) {
-            impl_->grabber->deviceClose(err);
-        }
+        if (impl_->grabber && (*impl_->grabber) && impl_->grabber->isAcquisitionActive()) impl_->grabber->acquisitionStop(err);
+        if (impl_->grabber && (*impl_->grabber) && impl_->grabber->isStreaming()) impl_->grabber->streamStop(err);
+        if (impl_->grabber && (*impl_->grabber) && impl_->grabber->isDeviceOpen()) impl_->grabber->deviceClose(err);
     } catch (...) {
     }
-
     {
         std::lock_guard<std::mutex> lock(impl_->pendingMutex);
         impl_->pendingFrames.clear();
@@ -857,11 +612,7 @@ D3D12ReadResult D3D12CameraCapture::read(ReadMode mode)
 D3D12ReadResult D3D12CameraCapture::read(const CameraReadOptions& options)
 {
     D3D12ReadResult result;
-    if (!opened_.load() || !impl_) {
-        result.error = MakeError(ErrorCode::NotOpened, "D3D12CameraCapture::read", "Capture is not opened");
-        lastError_ = result.error;
-        return result;
-    }
+    if (!opened_.load() || !impl_) { result.error = MakeError(ErrorCode::NotOpened, "D3D12CameraCapture::read", "Capture is not opened"); lastError_ = result.error; return result; }
 
     PendingIC4Frame pending;
     {
@@ -875,11 +626,8 @@ D3D12ReadResult D3D12CameraCapture::read(const CameraReadOptions& options)
             lastError_ = result.error;
             return result;
         }
-
         if (options.mode == ReadMode::LatestFrame) {
-            if (impl_->pendingFrames.size() > 1) {
-                impl_->incrementDropped(static_cast<std::uint64_t>(impl_->pendingFrames.size() - 1));
-            }
+            if (impl_->pendingFrames.size() > 1) impl_->incrementDropped(static_cast<std::uint64_t>(impl_->pendingFrames.size() - 1));
             pending = std::move(impl_->pendingFrames.back());
             impl_->pendingFrames.clear();
         } else {
@@ -890,18 +638,11 @@ D3D12ReadResult D3D12CameraCapture::read(const CameraReadOptions& options)
 
     ic4::Error ptrErr;
     const auto* data = static_cast<const std::uint8_t*>(pending.buffer->ptr(ptrErr));
-    if (ptrErr.isError() || !data) {
-        result.error = MakeError(ErrorCode::IC4Error, "D3D12CameraCapture::read / ImageBuffer::ptr", IC4ErrorMessage(ptrErr));
-        lastError_ = result.error;
-        return result;
-    }
+    if (ptrErr.isError() || !data) { result.error = MakeError(ErrorCode::IC4Error, "D3D12CameraCapture::read / ImageBuffer::ptr", IC4ErrorMessage(ptrErr)); lastError_ = result.error; return result; }
+
     ic4::Error sizeErr;
     const auto dataSize = pending.buffer->bufferSize(sizeErr);
-    if (sizeErr.isError() || dataSize == 0) {
-        result.error = MakeError(ErrorCode::IC4Error, "D3D12CameraCapture::read / ImageBuffer::bufferSize", IC4ErrorMessage(sizeErr));
-        lastError_ = result.error;
-        return result;
-    }
+    if (sizeErr.isError() || dataSize == 0) { result.error = MakeError(ErrorCode::IC4Error, "D3D12CameraCapture::read / ImageBuffer::bufferSize", IC4ErrorMessage(sizeErr)); lastError_ = result.error; return result; }
 
     D3D12CpuFrameView view;
     view.data = data;
@@ -915,98 +656,67 @@ D3D12ReadResult D3D12CameraCapture::read(const CameraReadOptions& options)
         lastError_ = result.error;
         return result;
     }
+    result.frame.chunkMetadata = pending.chunkMetadata;
 
     impl_->incrementReadFrames();
     result.ok = true;
     return result;
 }
 
-
 bool D3D12CameraCapture::applyIC4StateJson(const std::filesystem::path& jsonPath,
                                            std::size_t deviceIndex,
                                            bool strict,
                                            bool applyNestedSelectorStates)
 {
-    if (!opened_.load() || !impl_) {
-        setError(ErrorCode::NotOpened, "D3D12CameraCapture::applyIC4StateJson", "Capture is not opened");
-        return false;
-    }
-
+    if (!opened_.load() || !impl_) { setError(ErrorCode::NotOpened, "D3D12CameraCapture::applyIC4StateJson", "Capture is not opened"); return false; }
     std::lock_guard<std::mutex> lock(impl_->controlMutex);
     CameraCaptureConfig updated = impl_->config;
     updated.ic4StateJson.path = jsonPath;
     updated.ic4StateJson.deviceIndex = deviceIndex;
     updated.ic4StateJson.strict = strict;
     updated.ic4StateJson.applyNestedSelectorStates = applyNestedSelectorStates;
-
     ErrorInfo effectiveError;
     updated = BuildEffectiveConfigFromJson(updated, effectiveError);
-    if (effectiveError) {
-        lastError_ = effectiveError;
-        impl_->lastError = effectiveError;
-        return false;
-    }
-
+    if (effectiveError) { lastError_ = effectiveError; impl_->lastError = effectiveError; return false; }
     impl_->config = updated;
     impl_->lastError = NoError();
-    if (!impl_->applyJsonStateConfig()) {
-        lastError_ = impl_->lastError;
-        return false;
-    }
+    if (!impl_->applyJsonStateConfig()) { lastError_ = impl_->lastError; return false; }
     lastError_ = impl_->lastError;
     return true;
 }
 
 bool D3D12CameraCapture::setIC4Property(const std::string& propertyName, bool value)
 {
-    if (!opened_.load() || !impl_) {
-        setError(ErrorCode::NotOpened, "D3D12CameraCapture::setIC4Property", "Capture is not opened");
-        return false;
-    }
-    const bool ok = impl_->setProperty(propertyName, value, "D3D12CameraCapture::setIC4Property(bool)");
+    if (!opened_.load() || !impl_) { setError(ErrorCode::NotOpened, "D3D12CameraCapture::setIC4Property", "Capture is not opened"); return false; }
+    const bool ok = impl_->setPropertyValue(propertyName, value, "D3D12CameraCapture::setIC4Property(bool)");
     lastError_ = ok ? NoError() : impl_->lastError;
     return ok;
 }
 
-bool D3D12CameraCapture::setIC4Property(const std::string& propertyName, int value)
-{
-    return setIC4Property(propertyName, static_cast<std::int64_t>(value));
-}
+bool D3D12CameraCapture::setIC4Property(const std::string& propertyName, int value) { return setIC4Property(propertyName, static_cast<std::int64_t>(value)); }
 
 bool D3D12CameraCapture::setIC4Property(const std::string& propertyName, std::int64_t value)
 {
-    if (!opened_.load() || !impl_) {
-        setError(ErrorCode::NotOpened, "D3D12CameraCapture::setIC4Property", "Capture is not opened");
-        return false;
-    }
-    const bool ok = impl_->setProperty(propertyName, value, "D3D12CameraCapture::setIC4Property(int64)");
+    if (!opened_.load() || !impl_) { setError(ErrorCode::NotOpened, "D3D12CameraCapture::setIC4Property", "Capture is not opened"); return false; }
+    const bool ok = impl_->setPropertyValue(propertyName, value, "D3D12CameraCapture::setIC4Property(int64)");
     lastError_ = ok ? NoError() : impl_->lastError;
     return ok;
 }
 
 bool D3D12CameraCapture::setIC4Property(const std::string& propertyName, double value)
 {
-    if (!opened_.load() || !impl_) {
-        setError(ErrorCode::NotOpened, "D3D12CameraCapture::setIC4Property", "Capture is not opened");
-        return false;
-    }
-    const bool ok = impl_->setProperty(propertyName, value, "D3D12CameraCapture::setIC4Property(double)");
+    if (!opened_.load() || !impl_) { setError(ErrorCode::NotOpened, "D3D12CameraCapture::setIC4Property", "Capture is not opened"); return false; }
+    const bool ok = impl_->setPropertyValue(propertyName, value, "D3D12CameraCapture::setIC4Property(double)");
     lastError_ = ok ? NoError() : impl_->lastError;
     return ok;
 }
 
-bool D3D12CameraCapture::setIC4Property(const std::string& propertyName, const char* value)
-{
-    return setIC4Property(propertyName, std::string(value ? value : ""));
-}
+bool D3D12CameraCapture::setIC4Property(const std::string& propertyName, const char* value) { return setIC4Property(propertyName, std::string(value ? value : "")); }
 
 bool D3D12CameraCapture::setIC4Property(const std::string& propertyName, const std::string& value)
 {
-    if (!opened_.load() || !impl_) {
-        setError(ErrorCode::NotOpened, "D3D12CameraCapture::setIC4Property", "Capture is not opened");
-        return false;
-    }
-    const bool ok = impl_->setProperty(propertyName, value, "D3D12CameraCapture::setIC4Property(string)");
+    if (!opened_.load() || !impl_) { setError(ErrorCode::NotOpened, "D3D12CameraCapture::setIC4Property", "Capture is not opened"); return false; }
+    const bool ok = impl_->setPropertyValue(propertyName, value, "D3D12CameraCapture::setIC4Property(string)");
     lastError_ = ok ? NoError() : impl_->lastError;
     return ok;
 }
@@ -1018,40 +728,18 @@ bool D3D12CameraCapture::setFrameRate(double fps)
     return ok;
 }
 
-bool D3D12CameraCapture::setExposureAuto(const std::string& mode)
-{
-    return setIC4Property("ExposureAuto", mode);
-}
-
-bool D3D12CameraCapture::setExposureTime(double exposureTimeUs)
-{
-    return setIC4Property("ExposureTime", exposureTimeUs);
-}
-
-bool D3D12CameraCapture::setGainAuto(const std::string& mode)
-{
-    return setIC4Property("GainAuto", mode);
-}
-
-bool D3D12CameraCapture::setGain(double gain)
-{
-    return setIC4Property("Gain", gain);
-}
-
-bool D3D12CameraCapture::setGamma(double gamma)
-{
-    return setIC4Property("Gamma", gamma);
-}
+bool D3D12CameraCapture::setExposureAuto(const std::string& mode) { return setIC4Property("ExposureAuto", mode); }
+bool D3D12CameraCapture::setExposureTime(double exposureTimeUs) { return setIC4Property("ExposureTime", exposureTimeUs); }
+bool D3D12CameraCapture::setGainAuto(const std::string& mode) { return setIC4Property("GainAuto", mode); }
+bool D3D12CameraCapture::setGain(double gain) { return setIC4Property("Gain", gain); }
+bool D3D12CameraCapture::setGamma(double gamma) { return setIC4Property("Gamma", gamma); }
 
 bool D3D12CameraCapture::setOffset(int offsetX, int offsetY)
 {
     if (!setIC4Property("OffsetAutoCenter", std::string("Off"))) return false;
     if (!setIC4Property("OffsetX", offsetX)) return false;
     if (!setIC4Property("OffsetY", offsetY)) return false;
-    if (impl_) {
-        impl_->config.streamRequest.offsetX = offsetX;
-        impl_->config.streamRequest.offsetY = offsetY;
-    }
+    if (impl_) { impl_->config.streamRequest.offsetX = offsetX; impl_->config.streamRequest.offsetY = offsetY; }
     return true;
 }
 
