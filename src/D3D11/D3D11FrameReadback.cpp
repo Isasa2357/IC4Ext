@@ -1,5 +1,8 @@
 #include "IC4Ext/D3D11/D3D11FrameReadback.hpp"
 
+#include <D3D11Helper/D3D11Gpu/D3D11Resource.hpp>
+#include <D3D11Helper/D3D11Gpu/D3D11TextureTransfer.hpp>
+
 #include <sstream>
 #include <string>
 
@@ -35,9 +38,27 @@ void D3D11FrameReadback::setError(ErrorCode code, const std::string& where, cons
     lastError_ = MakeError(code, where, message);
 }
 
+bool D3D11FrameReadback::initialize(D3D11CoreLib::D3D11Core* core)
+{
+    lastError_ = NoError();
+    if (!core) {
+        setError(ErrorCode::InvalidArgument, "D3D11FrameReadback::initialize", "D3D11Core must be non-null");
+        return false;
+    }
+    core_ = core;
+    device_ = core->GetDevice();
+    context_ = core->GetImmediateContext();
+    if (!device_ || !context_) {
+        setError(ErrorCode::InvalidArgument, "D3D11FrameReadback::initialize", "D3D11Core has null device/context");
+        return false;
+    }
+    return true;
+}
+
 bool D3D11FrameReadback::initialize(ID3D11Device* device, ID3D11DeviceContext* context)
 {
     lastError_ = NoError();
+    core_ = nullptr;
     if (!device || !context) {
         setError(ErrorCode::InvalidArgument, "D3D11FrameReadback::initialize", "device and context must be non-null");
         return false;
@@ -83,6 +104,30 @@ bool D3D11FrameReadback::readback(const D3D11CameraFrame& frame,
     if (frame.ready.isValid() && !frame.ready.wait(waitTimeoutMs)) {
         setError(ErrorCode::Timeout, "D3D11FrameReadback::readback", "timed out waiting for frame ready fence");
         return false;
+    }
+
+    if (core_) {
+        try {
+            D3D11CoreLib::D3D11Resource srcResource(frame.texture);
+            const D3D11CoreLib::D3D11CpuImage image = D3D11CoreLib::ReadbackTexture2DToCpuImage(*core_, srcResource);
+            if (image.planes.empty()) {
+                setError(ErrorCode::D3D11Error, "D3D11FrameReadback::ReadbackTexture2DToCpuImage", "readback image has no planes");
+                return false;
+            }
+            const auto& plane = image.planes[0];
+            return ConvertPackedGpuFrameToCpuFrame(image.pixels.data() + plane.offsetBytes,
+                                                   image.width,
+                                                   image.height,
+                                                   plane.rowPitch,
+                                                   srcFormat,
+                                                   dstFormat,
+                                                   frame.timing,
+                                                   out,
+                                                   &lastError_);
+        } catch (const std::exception& e) {
+            setError(ErrorCode::D3D11Error, "D3D11FrameReadback::ReadbackTexture2DToCpuImage", e.what());
+            return false;
+        }
     }
 
     D3D11_TEXTURE2D_DESC desc{};
