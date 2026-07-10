@@ -8,3 +8,7 @@ if(WIN32 AND IC4_SDK_ROOT)
             "$<TARGET_FILE_DIR:SingleCameraLogD3D12>/ic4core.dll"
         VERBATIM)
 endif()
+
+add_subdirectory(
+    "${CMAKE_CURRENT_LIST_DIR}/../MultiCameraSyncDisplayD3D12"
+    "${CMAKE_CURRENT_BINARY_DIR}/MultiCameraSyncDisplayD3D12")
