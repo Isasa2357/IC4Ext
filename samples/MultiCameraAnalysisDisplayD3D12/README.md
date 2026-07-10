@@ -4,6 +4,18 @@
 
 解析後の映像をそのまま表示し、`--record`を指定した場合は同じ解析済み合成フレームを動画へ保存します。
 
+## 同期モードの実機検証状況
+
+```text
+free-run + HostReceived : 利用可能。標準許容差10 ms
+HW trigger + Line1      : 推奨。実機で許容差4 msまで安定動作を確認
+SW trigger              : 実験的。現状は安定同期を確認できていないため非推奨
+```
+
+SW trigger APIとサンプル引数は将来改善のため残しています。現時点の実運用ではHW triggerを使用してください。SW triggerの今後の検討事項は`docs/future/SoftwareTriggerSynchronization.md`に記録しています。
+
+ここでいう4 msは`HostReceived`の対応付け許容差であり、露光開始時刻の差そのものを4 ms以内と保証する値ではありません。
+
 ## 標準カメラ設定
 
 このサンプルは、標準で次のファイルを読み込みます。
@@ -51,10 +63,16 @@ camera 1 frame -> hostReceivedTime
                   +-> 時刻差がmaxTimestampDiffNs以内の組を選択
 ```
 
-標準の許容差は、実機確認済みの10 msです。
+free-runの標準許容差は、実機確認済みの10 msです。
 
 ```text
 maxTimestampDiffNs = 10000000
+```
+
+HW triggerでは4 msまで安定動作を確認しています。
+
+```text
+maxTimestampDiffNs = 4000000
 ```
 
 独立したカメラのframe numberは、取得開始タイミングやcounter初期値によってずれるため、このサンプルでは`FrameNumberExact`を使用しません。
@@ -81,6 +99,8 @@ camera 1: AcquisitionStop
 ```
 
 `TriggerMode=Off`へ戻した後は通常のfree-runです。JSON内の露出・gain設定は保持されます。
+
+この起動ゲートにSoftware Trigger設定を利用していることと、`--trigger-mode software`によるSW同期機能は別です。起動ゲートはfree-run開始前に画像転送を抑止する目的で使用します。
 
 ## ビルド
 
@@ -119,22 +139,24 @@ JSONを使わず、CLIだけで設定する場合:
 MultiCameraAnalysisDisplayD3D12.exe --devices 0,1 --trigger-mode none --no-ic4-json --format BayerRG8 --width 1280 --height 720 --fps 30 --offset-x 236 --offset-y 0
 ```
 
-HW triggerを使う場合:
+HW triggerを使う場合（推奨・実機確認済み）:
 
 ```bat
-MultiCameraAnalysisDisplayD3D12.exe --devices 0,1 --trigger-mode hardware --trigger-source Line1 --max-timestamp-diff-ns 10000000
+MultiCameraAnalysisDisplayD3D12.exe --devices 0,1 --trigger-mode hardware --trigger-source Line1 --max-timestamp-diff-ns 4000000
 ```
 
-SW triggerを使う場合:
+SW triggerを使う場合（実験的・非推奨）:
 
 ```bat
 MultiCameraAnalysisDisplayD3D12.exe --devices 0,1 --trigger-mode software --max-timestamp-diff-ns 10000000
 ```
 
+SW triggerは各カメラへ`TriggerSoftware`を順番に送る現在の実装では、送信遅延とjitterを十分に抑えられていません。同期精度が必要な用途では使用しないでください。
+
 解析済み合成映像を保存する場合:
 
 ```bat
-MultiCameraAnalysisDisplayD3D12.exe --devices 0,1 --trigger-mode none --canvas-width 1920 --canvas-height 1080 --record analyzed_sync.mp4
+MultiCameraAnalysisDisplayD3D12.exe --devices 0,1 --trigger-mode hardware --trigger-source Line1 --max-timestamp-diff-ns 4000000 --canvas-width 1920 --canvas-height 1080 --record analyzed_hw_sync.mp4
 ```
 
 ## 引数
