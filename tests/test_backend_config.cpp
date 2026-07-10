@@ -7,7 +7,7 @@
 namespace {
 
 const IC4Ext::IC4PropertyOverride* FindOverride(const IC4Ext::CameraCaptureConfig& config,
-                                                const std::string& name)
+                                                 const std::string& name)
 {
     for (const auto& ov : config.propertyOverrides) {
         if (ov.propertyName == name) return &ov;
@@ -30,6 +30,12 @@ int main()
 #if !IC4EXT_ENABLE_D3D11 && !IC4EXT_ENABLE_D3D12
 #error "IC4Ext test target has no backend enabled"
 #endif
+
+    static_assert(IC4EXT_VERSION_MAJOR == 1);
+    static_assert(IC4EXT_VERSION_MINOR == 0);
+    static_assert(IC4EXT_VERSION_PATCH == 1);
+    assert(std::string(IC4EXT_VERSION_STRING) == "1.0.1");
+    assert(std::string(IC4Ext::VersionString) == "1.0.1");
 
     IC4Ext::CameraPerformanceSnapshot perfDefaults;
     assert(!perfDefaults.streamStatistics.hasValue);
@@ -82,7 +88,8 @@ int main()
     assert(cmd.type == IC4Ext::CameraControlCommandType::SetExposureTime);
     assert(cmd.doubleValue == 1234.0);
 
-    std::cout << "test_backend_config passed D3D11=" << IC4EXT_ENABLE_D3D11
+    std::cout << "test_backend_config passed version=" << IC4EXT_VERSION_STRING
+              << " D3D11=" << IC4EXT_ENABLE_D3D11
               << " D3D12=" << IC4EXT_ENABLE_D3D12 << "\n";
     return 0;
 }
