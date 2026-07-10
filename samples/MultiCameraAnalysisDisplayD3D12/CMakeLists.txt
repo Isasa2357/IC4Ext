@@ -17,5 +17,8 @@ if(WIN32 AND IC4_SDK_ROOT)
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${CMAKE_CURRENT_SOURCE_DIR}/../../shaders"
             "$<TARGET_FILE_DIR:MultiCameraAnalysisDisplayD3D12>/shaders"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/config"
+            "$<TARGET_FILE_DIR:MultiCameraAnalysisDisplayD3D12>/config"
         VERBATIM)
 endif()
