@@ -11,6 +11,7 @@
 #endif
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <exception>
 #include <iostream>
