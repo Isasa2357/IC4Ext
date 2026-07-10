@@ -11,6 +11,7 @@
 #endif
 
 #include <algorithm>
+#include <cassert>
 #include <cctype>
 #include <chrono>
 #include <exception>
@@ -20,18 +21,24 @@
 
 namespace {
 
+void Stage(const char* backend, const char* phase, const char* stage)
+{
+    std::cerr << "[long-run][" << backend << "][" << phase << "] "
+              << stage << std::endl;
+}
+
 std::string Lower(std::string text)
 {
-    std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
     return text;
 }
 
 bool ShouldRunBackend(const char* backendName)
 {
     const char* requestedEnv = IC4ExtTest::Env("IC4EXT_TEST_STRESS_BACKEND");
-    if (!requestedEnv || std::string(requestedEnv).empty()) {
-        return true;
-    }
+    if (!requestedEnv || std::string(requestedEnv).empty()) return true;
     const std::string requested = Lower(requestedEnv);
     return requested == "both" || requested == "all" || requested == Lower(backendName);
 }
@@ -59,23 +66,21 @@ void PrintPerformance(const char* tag, const IC4Ext::CameraPerformanceSnapshot& 
 void ApplyStressOverrides(IC4Ext::CameraCaptureConfig& config)
 {
     const double stressFps = IC4ExtTest::EnvDouble("IC4EXT_TEST_STRESS_FPS", 0.0);
-    if (stressFps > 0.0) {
-        config.streamRequest.fps = stressFps;
-    }
+    if (stressFps > 0.0) config.streamRequest.fps = stressFps;
 }
 
 #if IC4EXT_ENABLE_D3D11
 int RunD3D11LongRun(int frameCount, int restartCycles, int readTimeoutMs)
 {
-    if (!ShouldRunBackend("d3d11")) {
-        return 77;
-    }
+    if (!ShouldRunBackend("d3d11")) return 77;
 
+    Stage("D3D11", "setup", "creating core");
     std::shared_ptr<D3D11CoreLib::D3D11Core> core;
     try {
         core = D3D11CoreLib::D3D11Core::CreateShared();
     } catch (const std::exception& e) {
-        std::cerr << "D3D11Core creation failed; skipping D3D11 stress path: " << e.what() << "\n";
+        std::cerr << "D3D11Core creation failed; skipping D3D11 stress path: "
+                  << e.what() << "\n";
         return 77;
     }
 
@@ -87,6 +92,7 @@ int RunD3D11LongRun(int frameCount, int restartCycles, int readTimeoutMs)
         ApplyStressOverrides(config);
 
         IC4Ext::D3D11CameraCapture capture;
+        Stage("D3D11", phase, "opening capture");
         if (!capture.open(selector, config, core.get())) {
             std::cerr << "D3D11 " << phase << " open failed; skipping: "
                       << capture.lastError().where << ": " << capture.lastError().message << "\n";
@@ -103,33 +109,51 @@ int RunD3D11LongRun(int frameCount, int restartCycles, int readTimeoutMs)
             if (!result) {
                 std::cerr << "D3D11 " << phase << " read failed at frame " << i
                           << ": " << result.error.where << ": " << result.error.message << "\n";
+                capture.stopAcquisition();
                 capture.close();
                 return 1;
             }
-            if (!result.frame.texture || !result.frame.ready.wait(static_cast<unsigned>(readTimeoutMs))) {
-                std::cerr << "D3D11 " << phase << " texture/fence invalid at frame " << i << "\n";
+            if (!result.frame.texture ||
+                !result.frame.ready.wait(static_cast<unsigned>(readTimeoutMs))) {
+                std::cerr << "D3D11 " << phase
+                          << " texture/fence invalid at frame " << i << "\n";
+                result = {};
+                capture.stopAcquisition();
                 capture.close();
                 return 1;
             }
+            result = {};
         }
-        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start).count();
+        Stage("D3D11", phase, "sampling performance");
         const auto perf = capture.performance();
         PrintPerformance(phase, perf);
         assert(perf.captureStats.readFrames >= static_cast<std::uint64_t>(framesToRead));
-        std::cout << "D3D11 " << phase << " read " << framesToRead << " frames in " << elapsed << " ms\n";
+        std::cout << "D3D11 " << phase << " read " << framesToRead
+                  << " frames in " << elapsed << " ms\n";
+
+        Stage("D3D11", phase, "stopping acquisition");
+        if (!capture.stopAcquisition()) {
+            std::cerr << "D3D11 " << phase << " stopAcquisition failed: "
+                      << capture.lastError().where << ": " << capture.lastError().message << "\n";
+            capture.close();
+            return 1;
+        }
+        Stage("D3D11", phase, "closing capture");
         capture.close();
+        Stage("D3D11", phase, "closed");
         IC4ExtTest::SleepAfterCameraAccess();
         return 0;
     };
 
     int rc = runOnce(frameCount, "long-run");
     if (rc != 0) return rc;
-
     for (int i = 0; i < restartCycles; ++i) {
         rc = runOnce(3, "restart");
         if (rc != 0) return rc;
     }
-
     return 0;
 }
 #endif
@@ -137,15 +161,15 @@ int RunD3D11LongRun(int frameCount, int restartCycles, int readTimeoutMs)
 #if IC4EXT_ENABLE_D3D12
 int RunD3D12LongRun(int frameCount, int restartCycles, int readTimeoutMs)
 {
-    if (!ShouldRunBackend("d3d12")) {
-        return 77;
-    }
+    if (!ShouldRunBackend("d3d12")) return 77;
 
+    Stage("D3D12", "setup", "creating core");
     std::shared_ptr<D3D12CoreLib::D3D12Core> core;
     try {
         core = D3D12CoreLib::D3D12Core::CreateShared();
     } catch (const std::exception& e) {
-        std::cerr << "D3D12Core creation failed; skipping D3D12 stress path: " << e.what() << "\n";
+        std::cerr << "D3D12Core creation failed; skipping D3D12 stress path: "
+                  << e.what() << "\n";
         return 77;
     }
 
@@ -163,6 +187,7 @@ int RunD3D12LongRun(int frameCount, int restartCycles, int readTimeoutMs)
         ApplyStressOverrides(config);
 
         IC4Ext::D3D12CameraCapture capture;
+        Stage("D3D12", phase, "opening capture");
         if (!capture.open(selector, config, backend)) {
             std::cerr << "D3D12 " << phase << " open failed; skipping: "
                       << capture.lastError().where << ": " << capture.lastError().message << "\n";
@@ -179,33 +204,53 @@ int RunD3D12LongRun(int frameCount, int restartCycles, int readTimeoutMs)
             if (!result) {
                 std::cerr << "D3D12 " << phase << " read failed at frame " << i
                           << ": " << result.error.where << ": " << result.error.message << "\n";
+                capture.stopAcquisition();
                 capture.close();
                 return 1;
             }
-            if (!result.frame.texture || !result.frame.ready.wait(static_cast<unsigned>(readTimeoutMs))) {
-                std::cerr << "D3D12 " << phase << " texture/fence invalid at frame " << i << "\n";
+            if (!result.frame.texture ||
+                !result.frame.ready.wait(static_cast<unsigned>(readTimeoutMs))) {
+                std::cerr << "D3D12 " << phase
+                          << " texture/fence invalid at frame " << i << "\n";
+                result = {};
+                capture.stopAcquisition();
                 capture.close();
                 return 1;
             }
+            result = {};
         }
-        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start).count();
+        Stage("D3D12", phase, "sampling performance");
         const auto perf = capture.performance();
         PrintPerformance(phase, perf);
         assert(perf.captureStats.readFrames >= static_cast<std::uint64_t>(framesToRead));
-        std::cout << "D3D12 " << phase << " read " << framesToRead << " frames in " << elapsed << " ms\n";
+        std::cout << "D3D12 " << phase << " read " << framesToRead
+                  << " frames in " << elapsed << " ms\n";
+
+        Stage("D3D12", phase, "stopping acquisition");
+        if (!capture.stopAcquisition()) {
+            std::cerr << "D3D12 " << phase << " stopAcquisition failed: "
+                      << capture.lastError().where << ": " << capture.lastError().message << "\n";
+            capture.close();
+            return 1;
+        }
+        Stage("D3D12", phase, "closing capture");
         capture.close();
+        Stage("D3D12", phase, "waiting GPU idle");
+        core->WaitIdle();
+        Stage("D3D12", phase, "closed");
         IC4ExtTest::SleepAfterCameraAccess();
         return 0;
     };
 
     int rc = runOnce(frameCount, "long-run");
     if (rc != 0) return rc;
-
     for (int i = 0; i < restartCycles; ++i) {
         rc = runOnce(3, "restart");
         if (rc != 0) return rc;
     }
-
     return 0;
 }
 #endif
@@ -216,13 +261,13 @@ int main()
 {
     IC4ExtTest::CameraAccessCooldown cooldown;
 
-    if (!IC4ExtTest::RequireCameraCount(1)) {
-        return 77;
-    }
+    Stage("test", "setup", "enumerating cameras");
+    if (!IC4ExtTest::RequireCameraCount(1)) return 77;
 
     const int frameCount = IC4ExtTest::EnvInt("IC4EXT_TEST_STRESS_FRAMES", 1000);
     const int restartCycles = IC4ExtTest::EnvInt("IC4EXT_TEST_RESTART_CYCLES", 3);
-    const int readTimeoutMs = IC4ExtTest::EnvInt("IC4EXT_TEST_STRESS_READ_TIMEOUT_MS", 5000);
+    const int readTimeoutMs =
+        IC4ExtTest::EnvInt("IC4EXT_TEST_STRESS_READ_TIMEOUT_MS", 5000);
 
     bool ranAnyPath = false;
 
