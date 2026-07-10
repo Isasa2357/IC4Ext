@@ -79,6 +79,7 @@ public:
     bool setPixelFormat(CameraPixelFormat fmt) override;
 
     CameraCaptureStats stats() const;
+    CameraPerformanceSnapshot performance();
     const ErrorInfo& lastError() const noexcept override { return lastError_; }
 
 private:
