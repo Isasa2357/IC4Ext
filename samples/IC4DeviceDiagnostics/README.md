@@ -63,6 +63,41 @@ DeviceLinkThroughputLimitMode
 DeviceTLType
 ```
 
+## 公式measure-fps相当のDefault UserSetロード
+
+The Imaging Source公式`measure-fps`サンプルは、`streamSetup`前にDefault UserSetをロードして、TriggerModeなど取得を妨げる保存設定を初期状態へ戻します。
+
+同じ処理を行う場合:
+
+```bat
+IC4DeviceDiagnostics.exe --serial 12345678 --load-default-userset
+```
+
+この操作はカメラの現在設定をDefault UserSetへ戻します。明示的に指定した場合だけ実行されます。
+
+## 公式measure-fps相当のstreamSetup確認
+
+D3D、IC4Ext、FrameSyncThreadを介さず、IC4の`QueueSink::create`と`streamSetup(... AcquisitionStart)`だけで実際にフレームを取得します。
+
+```bat
+IC4DeviceDiagnostics.exe --serial 12345678 --probe-stream
+```
+
+Default UserSetロードとstream取得を連続して確認する場合:
+
+```bat
+IC4DeviceDiagnostics.exe --serial 12345678 --load-default-userset --probe-stream --stream-wait-ms 3000
+```
+
+主な終了コード:
+
+```text
+0 : PayloadSize読出し成功。--probe-stream指定時はフレーム取得も成功
+2 : deviceOpen成功だがPayloadSize読出し失敗
+3 : Default UserSetの選択またはロードに失敗
+4 : PayloadSizeは読めるが公式形式のstream取得に失敗
+```
+
 `deviceOpen: success`の後に`PayloadSize`だけがtimeoutする場合、カメラはOS/IC4には列挙されていますが、stream構築に必要なGenICam register readへ応答できていません。この場合はIC4ExtのD3D処理やFrameSyncThreadより前の問題です。
 
 確認対象は次です。
