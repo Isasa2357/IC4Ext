@@ -1,6 +1,7 @@
 #pragma once
 
 #include "IC4Ext/BackendConfig.hpp"
+#include "IC4Ext/Version.hpp"
 #include "IC4Ext/Config.hpp"
 #include "IC4Ext/Core/CoreTypes.hpp"
 #include "IC4Ext/Core/Error.hpp"
