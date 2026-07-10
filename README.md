@@ -16,7 +16,7 @@ IC4 の `QueueSink` から受け取った CPU 側 image buffer を D3D11 / D3D12
 | Runtime setters | 実装済み。露光、gain、gamma、fps、offset、ROI、任意 IC4 property |
 | DummyCameraCapture | D3D11 / D3D12 ともに実装済み |
 | FrameSyncThread | D3D11 / D3D12 ともに実装済み |
-| CpuFrame / readback | D3D11 / D3D12 ともに実装済み |
+| CpuFrame / readback | D3D11 / D3D12 ともに実装済み。readback resource reuse 対応 |
 | chunk metadata | 実装済み。取得できる chunk のみ `has*` flag 付きで保持 |
 | D3D12-D3D11 interop | 未実装 |
 | 10/12/16bit pixel format | 未実装。必要になったら追加予定 |
@@ -36,6 +36,7 @@ IC4 の `QueueSink` から受け取った CPU 側 image buffer を D3D11 / D3D12
 - `ExposureTime` / `Gain` / `Gamma` / `AcquisitionFrameRate` / `ROI` などを open 後に setter で変更可能
 - `D3D11DummyCameraCaptureGenerator` / `D3D12DummyCameraCaptureGenerator` による、1 台の実カメラからの擬似複数カメラ生成
 - GPU frame を `CpuFrame` として readback し、`Gray8` / `RGBA8` / `RGB8` / `BGR8` に変換可能
+- `D3D11FrameReadback` は staging texture cache、`D3D12FrameReadback` は readback buffer cache を持つ
 
 ## Supported formats
 
@@ -79,6 +80,8 @@ BGR8
 ```
 
 `CpuFrame` は常に tight packed です。
+
+`D3D11FrameReadback::cacheStats()` / `D3D12FrameReadback::cacheStats()` で readback cache の hit / miss / rebuild 数を確認できます。`resetCache()` で保持している readback resource を解放し、統計を初期化します。
 
 ### Chunk metadata
 
@@ -289,6 +292,9 @@ if (readback.readback(gpuFrame, IC4Ext::CpuFrameFormat::BGR8, cpu)) {
     // cpu.data は tight packed BGR8。
     // cpu.chunkMetadata は gpuFrame.chunkMetadata から引き継がれる。
 }
+
+const auto stats = readback.cacheStats();
+// stats.cacheHits / cacheMisses / resourceRebuilds で readback resource reuse を確認できる。
 ```
 
 ## IC Capture 4 JSON settings
@@ -340,7 +346,7 @@ Some properties, especially `Width`, `Height`, `OffsetX`, `OffsetY`, and `PixelF
 
 - D3D12-D3D11 shared texture interop は未実装です。
 - 10/12/16bit packed / unpacked pixel format は未実装です。
-- 高 fps 長時間運用、実カメラ readback 統合テスト、readback resource reuse 最適化は今後の確認事項です。
+- 高 fps 長時間運用と実カメラ readback 統合テストは今後の確認事項です。
 
 ## License
 
