@@ -4,11 +4,14 @@
 #include <D3D12Helper/D3D12Core/D3D12Core.hpp>
 #include <ThreadKit/Queues/QueueCommon.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <exception>
 #include <iostream>
 #include <memory>
+#include <string>
+#include <thread>
 
 namespace {
 
@@ -24,16 +27,23 @@ std::uint64_t AbsDiff(std::uint64_t lhs, std::uint64_t rhs)
     return lhs >= rhs ? lhs - rhs : rhs - lhs;
 }
 
+void PrintStage(const char* stage)
+{
+    std::cerr << "[camera2plus] " << stage << std::endl;
+}
+
 } // namespace
 
 int main()
 {
     IC4ExtTest::CameraAccessCooldown cooldown;
 
+    PrintStage("enumerating cameras");
     if (!IC4ExtTest::RequireCameraCount(2)) return 77;
 
     std::shared_ptr<D3D12CoreLib::D3D12Core> core;
     try {
+        PrintStage("creating D3D12Core");
         core = D3D12CoreLib::D3D12Core::CreateShared();
     } catch (const std::exception& exception) {
         std::cerr << "D3D12Core creation failed; skipping camera2plus test: "
@@ -59,11 +69,18 @@ int main()
         std::max(1, IC4ExtTest::EnvInt("IC4EXT_TEST_SYNC_SETS", 100));
     const int timeoutSeconds =
         std::max(5, IC4ExtTest::EnvInt("IC4EXT_TEST_SYNC_TIMEOUT_SECONDS", 30));
+    const int interCameraDelayMs =
+        std::max(0, IC4ExtTest::EnvInt("IC4EXT_TEST_INTER_CAMERA_DELAY_MS", 1000));
 
     auto config0 = IC4ExtTest::MakeCameraConfig("d3d12", 0);
     auto config1 = IC4ExtTest::MakeCameraConfig("d3d12", 1);
-    config0.acquisitionStartMode = IC4Ext::AcquisitionStartMode::Deferred;
-    config1.acquisitionStartMode = IC4Ext::AcquisitionStartMode::Deferred;
+
+    // IC4's official DeferAcquisitionStart path did not reliably start the second
+    // DFK 33UX252 with the current IC4 1.6.0.894 USB3Vision transport. Use the
+    // validated compatibility prepare sequence: normal streamSetup, then the typed
+    // stopAcquisition() API before preparing the next camera.
+    config0.acquisitionStartMode = IC4Ext::AcquisitionStartMode::Immediate;
+    config1.acquisitionStartMode = IC4Ext::AcquisitionStartMode::Immediate;
     config0.queuePolicy = IC4Ext::FrameQueuePolicy::PreserveFrames;
     config1.queuePolicy = IC4Ext::FrameQueuePolicy::PreserveFrames;
     config0.maxPendingBuffers = 32;
@@ -73,8 +90,12 @@ int main()
         IC4Ext::ConfigureHardwareTriggerSync(config0, triggerSource);
         IC4Ext::ConfigureHardwareTriggerSync(config1, triggerSource);
     } else {
-        IC4Ext::ConfigureNoSync(config0);
-        IC4Ext::ConfigureNoSync(config1);
+        // A temporary software-trigger gate prevents free-run transfer during stream
+        // setup. It is released after all cameras and workers are ready.
+        auto gate = IC4Ext::MakeSoftwareTriggerSyncConfig();
+        gate.setExposureAutoOff = false;
+        IC4Ext::ConfigureCameraSync(config0, gate);
+        IC4Ext::ConfigureCameraSync(config1, gate);
     }
 
     IC4Ext::IC4DeviceSelector selector0;
@@ -85,26 +106,36 @@ int main()
     IC4Ext::D3D12CameraCapture capture0;
     IC4Ext::D3D12CameraCapture capture1;
 
+    PrintStage("opening camera 0");
     if (!capture0.open(selector0, config0, backend)) {
-        std::cerr << "camera0 deferred open failed: "
-                  << capture0.lastError().where << ": "
+        std::cerr << "camera0 open failed: " << capture0.lastError().where << ": "
                   << capture0.lastError().message << "\n";
         return 1;
     }
-    if (!capture0.isStreaming() || capture0.isAcquisitionActive()) {
-        std::cerr << "camera0 was not left in deferred streaming state\n";
+    PrintStage("pausing camera 0");
+    if (!capture0.stopAcquisition()) {
+        std::cerr << "camera0 stopAcquisition failed: " << capture0.lastError().where << ": "
+                  << capture0.lastError().message << "\n";
         return 1;
     }
 
+    if (interCameraDelayMs > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(interCameraDelayMs));
+    }
+
+    PrintStage("opening camera 1");
     if (!capture1.open(selector1, config1, backend)) {
-        std::cerr << "camera1 deferred open failed: "
-                  << capture1.lastError().where << ": "
+        std::cerr << "camera1 open failed: " << capture1.lastError().where << ": "
                   << capture1.lastError().message << "\n";
         capture0.close();
         return 1;
     }
-    if (!capture1.isStreaming() || capture1.isAcquisitionActive()) {
-        std::cerr << "camera1 was not left in deferred streaming state\n";
+    PrintStage("pausing camera 1");
+    if (!capture1.stopAcquisition()) {
+        std::cerr << "camera1 stopAcquisition failed: " << capture1.lastError().where << ": "
+                  << capture1.lastError().message << "\n";
+        capture0.close();
+        capture1.close();
         return 1;
     }
 
@@ -124,9 +155,10 @@ int main()
     syncOptions.maxBufferedFramesPerCamera = 32;
 
     IC4Ext::D3D12FrameSyncThread sync(inputQueue, outputQueue, syncOptions);
+    PrintStage("starting sync thread");
     if (!sync.start()) {
-        std::cerr << "D3D12FrameSyncThread start failed: "
-                  << sync.lastError().where << ": " << sync.lastError().message << "\n";
+        std::cerr << "D3D12FrameSyncThread start failed: " << sync.lastError().where
+                  << ": " << sync.lastError().message << "\n";
         return 1;
     }
 
@@ -140,6 +172,7 @@ int main()
     camera0.addOutputQueue(0, inputQueue);
     camera1.addOutputQueue(1, inputQueue);
 
+    PrintStage("starting camera workers");
     if (!camera0.start() || !camera1.start()) {
         std::cerr << "camera worker start failed\n";
         camera0.stopAndJoin();
@@ -148,18 +181,30 @@ int main()
         return 1;
     }
 
+    if (!hardwareTrigger) {
+        PrintStage("releasing free-run trigger gates");
+        if (!camera0.setIC4Property("TriggerMode", std::string("Off")) ||
+            !camera1.setIC4Property("TriggerMode", std::string("Off"))) {
+            std::cerr << "Failed to release free-run trigger gate\n";
+            camera0.stopAndJoin();
+            camera1.stopAndJoin();
+            sync.stopAndJoin();
+            return 1;
+        }
+    }
+
+    PrintStage("starting camera acquisitions");
     if (!camera0.startAcquisition()) {
-        std::cerr << "camera0 startAcquisition failed: "
-                  << camera0.lastError().where << ": " << camera0.lastError().message << "\n";
+        std::cerr << "camera0 startAcquisition failed: " << camera0.lastError().where
+                  << ": " << camera0.lastError().message << "\n";
         camera0.stopAndJoin();
         camera1.stopAndJoin();
         sync.stopAndJoin();
         return 1;
     }
-
     if (!camera1.startAcquisition()) {
-        std::cerr << "camera1 startAcquisition failed: "
-                  << camera1.lastError().where << ": " << camera1.lastError().message << "\n";
+        std::cerr << "camera1 startAcquisition failed: " << camera1.lastError().where
+                  << ": " << camera1.lastError().message << "\n";
         camera0.stopAcquisition();
         camera0.stopAndJoin();
         camera1.stopAndJoin();
@@ -172,6 +217,7 @@ int main()
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSeconds);
 
+    PrintStage("collecting synchronized sets");
     while (receivedSets < targetSets && std::chrono::steady_clock::now() < deadline) {
         auto set = outputQueue->waitPopFor(std::chrono::milliseconds(1000));
         if (!set) continue;
@@ -180,18 +226,18 @@ int main()
             set->frames[0].cameraIndex != 0 ||
             set->frames[1].cameraIndex != 1) {
             std::cerr << "Unexpected synced frame set layout\n";
-            return 1;
+            break;
         }
         if (!set->frames[0].frame.texture || !set->frames[1].frame.texture) {
             std::cerr << "Synced set contains an empty GPU texture\n";
-            return 1;
+            break;
         }
 
         const std::uint64_t timestamp0 = HostTimestampNs(set->frames[0]);
         const std::uint64_t timestamp1 = HostTimestampNs(set->frames[1]);
         if (timestamp0 == 0 || timestamp1 == 0) {
             std::cerr << "Synced set has no host receive timestamp\n";
-            return 1;
+            break;
         }
 
         const std::uint64_t differenceNs = AbsDiff(timestamp0, timestamp1);
@@ -199,13 +245,15 @@ int main()
         if (differenceNs > toleranceNs) {
             std::cerr << "Host timestamp difference exceeded tolerance: diff="
                       << differenceNs << " tolerance=" << toleranceNs << "\n";
-            return 1;
+            break;
         }
         ++receivedSets;
     }
 
+    PrintStage("stopping acquisitions");
     const bool camera0Stopped = camera0.stopAcquisition();
     const bool camera1Stopped = camera1.stopAcquisition();
+    PrintStage("joining workers");
     camera0.stopAndJoin();
     camera1.stopAndJoin();
     sync.stopAndJoin();
@@ -220,8 +268,8 @@ int main()
         return 1;
     }
     if (receivedSets < targetSets) {
-        std::cerr << "Timed out waiting for synced sets: received=" << receivedSets
-                  << " target=" << targetSets << "\n";
+        std::cerr << "Timed out or validation failed while waiting for synced sets: received="
+                  << receivedSets << " target=" << targetSets << "\n";
         return 1;
     }
     if (camera0Stats.readErrors != 0 || camera1Stats.readErrors != 0) {
