@@ -2,16 +2,19 @@
 #include "IC4Ext/D3D11/D3D11FenceManager.hpp"
 #include "IC4Ext/D3D11/D3D11FrameConverter.hpp"
 #include "IC4Ext/Core/IC4ChunkMetadata.hpp"
+#include "../Core/IC4PerformanceUtil.hpp"
 
 #include <ic4/ic4.h>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <fstream>
 #include <memory>
 #include <optional>
 #include <sstream>
+#include <string>
 #include <utility>
 #include <variant>
 
@@ -359,6 +362,7 @@ public:
     mutable std::mutex statsMutex;
     mutable std::mutex controlMutex;
     CameraCaptureStats stats;
+    Internal::FrameTimingPerformanceTracker timingTracker;
     ErrorInfo lastError;
     bool connected = false;
 
@@ -410,6 +414,7 @@ public:
                 pending.timing.frameNumber = md.device_frame_number;
                 pending.timing.deviceTimestampNs = md.device_timestamp_ns;
             }
+            timingTracker.update(pending.timing);
 
             {
                 std::lock_guard<std::mutex> controlLock(controlMutex);
@@ -448,6 +453,20 @@ public:
             incrementReceived();
             pendingCv.notify_one();
         }
+    }
+
+    CameraPerformanceSnapshot performanceSnapshot()
+    {
+        CameraPerformanceSnapshot snapshot;
+        snapshot.sampledTime = std::chrono::steady_clock::now();
+        snapshot.captureStats = getStats();
+        snapshot.timing = timingTracker.snapshot();
+        if (grabber && (*grabber)) {
+            snapshot.streamStatistics = Internal::ReadStreamStatistics(grabber.get());
+            std::lock_guard<std::mutex> lock(controlMutex);
+            snapshot.temperatures = Internal::ReadDeviceTemperatures(grabber.get());
+        }
+        return snapshot;
     }
 
     std::optional<ic4::PropertyMap> getPropertyMap(const char* where)
@@ -670,6 +689,7 @@ void D3D11CameraCapture::close() noexcept
     impl_->listener.reset();
     impl_->converter.reset();
     impl_->fenceManager.reset();
+    impl_->timingTracker.reset();
     impl_->device = nullptr;
     impl_->context = nullptr;
 }
@@ -767,10 +787,7 @@ bool D3D11CameraCapture::setIC4Property(const std::string& propertyName, bool va
     return ok;
 }
 
-bool D3D11CameraCapture::setIC4Property(const std::string& propertyName, int value)
-{
-    return setIC4Property(propertyName, static_cast<std::int64_t>(value));
-}
+bool D3D11CameraCapture::setIC4Property(const std::string& propertyName, int value) { return setIC4Property(propertyName, static_cast<std::int64_t>(value)); }
 
 bool D3D11CameraCapture::setIC4Property(const std::string& propertyName, std::int64_t value)
 {
@@ -788,10 +805,7 @@ bool D3D11CameraCapture::setIC4Property(const std::string& propertyName, double 
     return ok;
 }
 
-bool D3D11CameraCapture::setIC4Property(const std::string& propertyName, const char* value)
-{
-    return setIC4Property(propertyName, std::string(value ? value : ""));
-}
+bool D3D11CameraCapture::setIC4Property(const std::string& propertyName, const char* value) { return setIC4Property(propertyName, std::string(value ? value : "")); }
 
 bool D3D11CameraCapture::setIC4Property(const std::string& propertyName, const std::string& value)
 {
@@ -830,21 +844,13 @@ bool D3D11CameraCapture::setRoi(int width, int height, int offsetX, int offsetY)
     if (!setIC4Property("Height", height)) return false;
     if (!setIC4Property("OffsetX", offsetX)) return false;
     if (!setIC4Property("OffsetY", offsetY)) return false;
-    if (impl_) {
-        impl_->config.streamRequest.width = width;
-        impl_->config.streamRequest.height = height;
-        impl_->config.streamRequest.offsetX = offsetX;
-        impl_->config.streamRequest.offsetY = offsetY;
-    }
+    if (impl_) { impl_->config.streamRequest.width = width; impl_->config.streamRequest.height = height; impl_->config.streamRequest.offsetX = offsetX; impl_->config.streamRequest.offsetY = offsetY; }
     return true;
 }
 
 bool D3D11CameraCapture::setPixelFormat(CameraPixelFormat fmt)
 {
-    if (!IsSupportedConversion(fmt, impl_ ? impl_->config.outputSpec.outputFormat : GpuFrameFormat::RGBA8)) {
-        setError(ErrorCode::UnsupportedFormat, "D3D11CameraCapture::setPixelFormat", std::string("Unsupported conversion: ") + ToString(fmt));
-        return false;
-    }
+    if (!IsSupportedConversion(fmt, impl_ ? impl_->config.outputSpec.outputFormat : GpuFrameFormat::RGBA8)) { setError(ErrorCode::UnsupportedFormat, "D3D11CameraCapture::setPixelFormat", std::string("Unsupported conversion: ") + ToString(fmt)); return false; }
     const bool ok = setIC4Property("PixelFormat", std::string(ToString(fmt)));
     if (ok && impl_) impl_->config.streamRequest.requestedFormat = fmt;
     return ok;
@@ -854,6 +860,12 @@ CameraCaptureStats D3D11CameraCapture::stats() const
 {
     if (!impl_) return {};
     return impl_->getStats();
+}
+
+CameraPerformanceSnapshot D3D11CameraCapture::performance()
+{
+    if (!impl_) return {};
+    return impl_->performanceSnapshot();
 }
 
 } // namespace IC4Ext
