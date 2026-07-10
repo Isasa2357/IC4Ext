@@ -31,6 +31,7 @@ struct CpuFrame
     std::vector<std::uint8_t> data;
 
     FrameTiming timing{};
+    FrameChunkMetadata chunkMetadata{};
 
     bool empty() const noexcept { return data.empty() || width == 0 || height == 0 || format == CpuFrameFormat::Unknown; }
 };
