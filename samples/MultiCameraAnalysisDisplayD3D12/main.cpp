@@ -143,10 +143,13 @@ IC4Ext::CameraCaptureConfig MakeCameraConfig(const Options& options)
 
     if (options.triggerMode == TriggerMode::Hardware) {
         IC4Ext::ConfigureHardwareTriggerSync(config, options.triggerSource);
-    } else if (options.triggerMode == TriggerMode::Software) {
-        IC4Ext::ConfigureSoftwareTriggerSync(config);
     } else {
-        IC4Ext::ConfigureNoSync(config);
+        // For requested software-trigger operation this is the final configuration.
+        // For requested free-run operation it is only a startup gate: streamSetup can
+        // finish for every camera without the first camera already transferring frames.
+        auto gate = IC4Ext::MakeSoftwareTriggerSyncConfig();
+        gate.setExposureAutoOff = false;
+        IC4Ext::ConfigureCameraSync(config, gate);
     }
     return config;
 }
@@ -169,7 +172,7 @@ bool OpenAndPauseCapture(IC4Ext::D3D12CameraCapture& capture,
             if (capture.setIC4Property("AcquisitionStop", std::string("execute"))) {
                 std::cout << "Prepared camera slot=" << cameraSlot
                           << " deviceIndex=" << deviceIndex
-                          << " (stream configured, acquisition paused)" << std::endl;
+                          << " (stream configured, trigger-gated, acquisition paused)" << std::endl;
                 return true;
             }
 
@@ -342,6 +345,7 @@ int main(int argc, char** argv)
                   << " interCameraSetupDelayMs=" << options.cameraSetupDelayMs
                   << " retries=" << options.cameraOpenRetries
                   << " retryDelayMs=" << options.cameraRetryDelayMs
+                  << " startupGate=" << (options.triggerMode == TriggerMode::None ? "software-trigger" : "native-trigger")
                   << " syncPolicy=timestamp-nearest"
                   << " timestampSource=host-received"
                   << " maxTimestampDiffNs=" << options.maxTimestampDiffNs << std::endl;
@@ -404,6 +408,18 @@ int main(int argc, char** argv)
                                          ": " + camera->lastError().where + ": " + camera->lastError().message);
             }
             cameras.push_back(std::move(camera));
+        }
+
+        if (options.triggerMode == TriggerMode::None) {
+            for (std::size_t i = 0; i < cameras.size(); ++i) {
+                if (!cameras[i]->setIC4Property("TriggerMode", std::string("Off"))) {
+                    throw std::runtime_error("Failed to release startup trigger gate slot=" + std::to_string(i) +
+                                             " deviceIndex=" + std::to_string(options.devices[i]) +
+                                             ": " + cameras[i]->lastError().where + ": " + cameras[i]->lastError().message);
+                }
+                std::cout << "Startup trigger gate released slot=" << i
+                          << " deviceIndex=" << options.devices[i] << std::endl;
+            }
         }
 
         for (std::size_t i = 0; i < cameras.size(); ++i) {
