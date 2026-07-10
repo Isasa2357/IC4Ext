@@ -3,6 +3,8 @@
 #include "IC4Ext/Core/Error.hpp"
 #include "IC4Ext/D3D11/D3D11ReadyToken.hpp"
 
+#include <D3D11Helper/D3D11Interop/D3D11Fence.hpp>
+
 #include <atomic>
 #include <d3d11_4.h>
 #include <wrl/client.h>
@@ -23,9 +25,8 @@ public:
 private:
     void setError(ErrorCode code, const std::string& where, const std::string& message);
 
-    Microsoft::WRL::ComPtr<ID3D11Device5> device5_;
-    Microsoft::WRL::ComPtr<ID3D11DeviceContext4> context4_;
-    Microsoft::WRL::ComPtr<ID3D11Fence> fence_;
+    ID3D11DeviceContext* context_ = nullptr;
+    D3D11CoreLib::D3D11Fence fence_;
     std::atomic<std::uint64_t> nextValue_{1};
     ErrorInfo lastError_;
 };
