@@ -57,6 +57,10 @@ int main()
     }
     gpuFrame.timing.frameNumber = 123;
     gpuFrame.timing.deviceTimestampNs = 456;
+    gpuFrame.chunkMetadata.hasExposureTime = true;
+    gpuFrame.chunkMetadata.exposureTimeUs = 2000.0;
+    gpuFrame.chunkMetadata.hasGain = true;
+    gpuFrame.chunkMetadata.gain = 12.0;
 
     IC4Ext::D3D11FrameReadback readback;
     assert(readback.initialize(device.Get(), context.Get()));
@@ -67,6 +71,8 @@ int main()
     assert(cpu.height == height);
     assert(cpu.rowPitch == width * 3);
     assert(cpu.timing.frameNumber == 123);
+    assert(cpu.chunkMetadata.hasExposureTime && cpu.chunkMetadata.exposureTimeUs == 2000.0);
+    assert(cpu.chunkMetadata.hasGain && cpu.chunkMetadata.gain == 12.0);
     assert((cpu.data == std::vector<std::uint8_t>{30,20,10, 60,50,40, 90,80,70, 3,2,1}));
 
     std::cout << "test_d3d11_frame_readback passed\n";
