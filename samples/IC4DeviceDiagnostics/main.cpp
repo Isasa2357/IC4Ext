@@ -1,7 +1,9 @@
 #include <ic4/ic4.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <optional>
