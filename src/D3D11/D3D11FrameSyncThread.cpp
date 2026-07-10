@@ -84,8 +84,10 @@ void D3D11FrameSyncThread::workerLoop()
 
         D3D11SyncedFrameSet set;
         set.syncGroupId = nextSyncGroupId_++;
-        set.emittedTime = std::chrono::steady_clock::now();
         set.frames.push_back(std::move(*item));
+        // The timestamp represents the submission point: the synchronized set is
+        // complete and is about to be pushed to the output queue.
+        set.emittedTime = std::chrono::steady_clock::now();
 
         auto res = outputQueue_->push(std::move(set));
         std::lock_guard<std::mutex> lock(statsMutex_);
