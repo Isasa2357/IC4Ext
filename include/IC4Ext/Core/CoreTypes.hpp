@@ -6,6 +6,8 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <string>
+#include <vector>
 
 namespace IC4Ext {
 
@@ -73,6 +75,61 @@ struct CameraCaptureStats
     std::uint64_t readFrames = 0;
     std::uint64_t readTimeouts = 0;
     std::uint64_t conversionFailures = 0;
+};
+
+struct IC4StreamStatistics
+{
+    bool hasValue = false;
+
+    std::uint64_t deviceDelivered = 0;
+    std::uint64_t deviceTransmissionError = 0;
+    std::uint64_t deviceTransformUnderrun = 0;
+    std::uint64_t deviceUnderrun = 0;
+
+    std::uint64_t transformDelivered = 0;
+    std::uint64_t transformUnderrun = 0;
+
+    std::uint64_t sinkDelivered = 0;
+    std::uint64_t sinkUnderrun = 0;
+    std::uint64_t sinkIgnored = 0;
+};
+
+struct CameraTimingPerformance
+{
+    bool hasDeviceInterval = false;
+    std::uint64_t deviceFrameIntervalNs = 0;
+    double deviceFps = 0.0;
+
+    bool hasDeviceJitter = false;
+    double deviceJitterNs = 0.0;
+
+    bool hasHostInterval = false;
+    std::uint64_t hostReceiveIntervalNs = 0;
+    double hostReceiveFps = 0.0;
+
+    bool hasHostJitter = false;
+    double hostJitterNs = 0.0;
+
+    bool hasFrameNumberGap = false;
+    std::uint64_t frameNumberGap = 0;
+    std::uint64_t estimatedDroppedFrames = 0;
+    std::uint64_t accumulatedEstimatedDroppedFrames = 0;
+};
+
+struct CameraTemperatureReading
+{
+    bool hasValue = false;
+    std::string selector;
+    double celsius = 0.0;
+};
+
+struct CameraPerformanceSnapshot
+{
+    std::chrono::steady_clock::time_point sampledTime{};
+    CameraCaptureStats captureStats{};
+    IC4StreamStatistics streamStatistics{};
+    CameraTimingPerformance timing{};
+    std::vector<CameraTemperatureReading> temperatures;
 };
 
 struct CameraThreadStats
