@@ -10,11 +10,34 @@
 #include <D3D12Helper/D3D12Core/D3D12Core.hpp>
 #endif
 
+#include <cassert>
 #include <exception>
 #include <iostream>
 #include <memory>
 
 namespace {
+
+void PrintPerformanceSummary(const char* backend, const IC4Ext::CameraPerformanceSnapshot& perf)
+{
+    std::cout << backend << " performance: received=" << perf.captureStats.receivedBuffers
+              << " read=" << perf.captureStats.readFrames
+              << " conversionFailures=" << perf.captureStats.conversionFailures;
+    if (perf.streamStatistics.hasValue) {
+        std::cout << " sinkDelivered=" << perf.streamStatistics.sinkDelivered
+                  << " deviceTransmissionError=" << perf.streamStatistics.deviceTransmissionError
+                  << " sinkUnderrun=" << perf.streamStatistics.sinkUnderrun;
+    }
+    if (perf.timing.hasDeviceInterval) {
+        std::cout << " deviceFps=" << perf.timing.deviceFps;
+    }
+    if (perf.timing.hasHostInterval) {
+        std::cout << " hostFps=" << perf.timing.hostReceiveFps;
+    }
+    if (!perf.temperatures.empty()) {
+        std::cout << " tempCount=" << perf.temperatures.size();
+    }
+    std::cout << "\n";
+}
 
 #if IC4EXT_ENABLE_D3D11
 int RunD3D11Path()
@@ -58,6 +81,10 @@ int RunD3D11Path()
         std::cerr << "D3D11 NextFrame texture/fence invalid\n";
         return 1;
     }
+
+    const auto perf = capture.performance();
+    assert(perf.captureStats.receivedBuffers >= 1);
+    PrintPerformanceSummary("D3D11", perf);
 
     capture.close();
     IC4ExtTest::SleepAfterCameraAccess();
@@ -114,6 +141,10 @@ int RunD3D12Path()
         std::cerr << "D3D12 NextFrame texture/fence invalid\n";
         return 1;
     }
+
+    const auto perf = capture.performance();
+    assert(perf.captureStats.receivedBuffers >= 1);
+    PrintPerformanceSummary("D3D12", perf);
 
     capture.close();
     IC4ExtTest::SleepAfterCameraAccess();
