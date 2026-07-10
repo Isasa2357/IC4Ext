@@ -127,6 +127,7 @@ bool D3D12FrameCopier::copyFrameNoSignal(const D3D12CameraFrame& src, D3D12Camer
         dst.resourceState = src.resourceState;
         dst.timing = src.timing;
         dst.format = src.format;
+        dst.chunkMetadata = src.chunkMetadata;
 
         slot->commandContext.Close();
         ID3D12CommandList* lists[] = { slot->commandContext.GetCommandList() };
