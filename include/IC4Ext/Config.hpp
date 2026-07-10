@@ -145,6 +145,11 @@ struct CameraCaptureConfig
     std::size_t maxPendingBuffers = 1;
     ShaderLoadConfig shaderConfig;
 
+    // false: streamSetup starts acquisition immediately (legacy/default behavior).
+    // true : streamSetup uses IC4 StreamSetupOption::DeferAcquisitionStart. Call
+    //        AcquisitionStart explicitly after all cameras are prepared.
+    bool deferAcquisitionStart = false;
+
     // Applied after JSON state and stream/ROI settings. This is mainly used by
     // D3D11CameraCaptureThread setters called before open(). It is also the path
     // used by ConfigureHardwareTriggerSync()/ConfigureSoftwareTriggerSync().
