@@ -26,6 +26,37 @@ struct FrameFormatMetadata
     std::size_t inputRowPitchBytes = 0;
 };
 
+struct FrameChunkMetadata
+{
+    bool hasBlockId = false;
+    std::uint64_t blockId = 0;
+
+    bool hasExposureTime = false;
+    double exposureTimeUs = 0.0;
+
+    bool hasGain = false;
+    double gain = 0.0;
+
+    bool hasIMX174FrameId = false;
+    std::int64_t imx174FrameId = 0;
+
+    bool hasIMX174FrameSet = false;
+    std::int64_t imx174FrameSet = 0;
+
+    bool hasMultiFrameSetId = false;
+    std::int64_t multiFrameSetId = 0;
+
+    bool hasMultiFrameSetFrameId = false;
+    std::int64_t multiFrameSetFrameId = 0;
+
+    bool hasAny() const noexcept
+    {
+        return hasBlockId || hasExposureTime || hasGain ||
+               hasIMX174FrameId || hasIMX174FrameSet ||
+               hasMultiFrameSetId || hasMultiFrameSetFrameId;
+    }
+};
+
 struct CameraCaptureStats
 {
     std::uint64_t receivedBuffers = 0;
