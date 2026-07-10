@@ -32,6 +32,14 @@ const char* ArgValue(int argc, char** argv, const char* name)
     return nullptr;
 }
 
+bool HasFlag(int argc, char** argv, const char* name)
+{
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == name) return true;
+    }
+    return false;
+}
+
 std::vector<int> ParseDevices(const std::string& text)
 {
     std::vector<int> result;
@@ -65,19 +73,59 @@ IC4Ext::CameraPixelFormat ParseCameraFormat(const std::string& text)
     return format;
 }
 
+std::filesystem::path ResolveDefaultGamma1Path(const char* executablePath)
+{
+    const std::filesystem::path sourceTreePath =
+        std::filesystem::path("samples") /
+        "MultiCameraAnalysisDisplayD3D12" /
+        "config" /
+        "gamma1.json";
+
+    if (std::filesystem::exists(sourceTreePath)) {
+        return sourceTreePath;
+    }
+
+    if (executablePath && *executablePath) {
+        std::error_code ec;
+        const auto executable = std::filesystem::absolute(executablePath, ec);
+        if (!ec) {
+            const auto copiedPath = executable.parent_path() / "config" / "gamma1.json";
+            if (std::filesystem::exists(copiedPath)) {
+                return copiedPath;
+            }
+        }
+    }
+
+    return sourceTreePath;
+}
+
 struct Options
 {
     std::vector<int> devices{0, 1};
     TriggerMode triggerMode = TriggerMode::None;
     std::string triggerSource = "Line1";
-    std::uint64_t maxTimestampDiffNs = 100'000'000;
+
+    // Confirmed free-run synchronization setting.
+    std::uint64_t maxTimestampDiffNs = 10'000'000;
+
+    // The gamma1 JSON values are used unless these are explicitly overridden.
     int width = 0;
     int height = 0;
     double fps = 0.0;
     IC4Ext::CameraPixelFormat cameraFormat = IC4Ext::CameraPixelFormat::BayerRG8;
+    bool formatSpecified = false;
+
+    std::filesystem::path ic4JsonPath;
+    std::size_t ic4JsonDeviceIndex = 0;
+
+    // Explicit ROI offsets are applied after the JSON state.
+    int offsetX = 236;
+    int offsetY = 0;
+
     int cameraSetupDelayMs = 1000;
     int cameraOpenRetries = 3;
     int cameraRetryDelayMs = 3000;
+
     int canvasWidth = 1600;
     int canvasHeight = 900;
     int maxSets = 0;
@@ -89,6 +137,8 @@ struct Options
 Options ParseOptions(int argc, char** argv)
 {
     Options o;
+    o.ic4JsonPath = ResolveDefaultGamma1Path(argc > 0 ? argv[0] : nullptr);
+
     if (const char* v = ArgValue(argc, argv, "--devices")) o.devices = ParseDevices(v);
     if (const char* v = ArgValue(argc, argv, "--trigger-mode")) o.triggerMode = ParseTriggerMode(v);
     if (const char* v = ArgValue(argc, argv, "--sync-policy")) {
@@ -103,15 +153,30 @@ Options ParseOptions(int argc, char** argv)
     if (const char* v = ArgValue(argc, argv, "--max-timestamp-diff-ns")) {
         o.maxTimestampDiffNs = std::strtoull(v, nullptr, 10);
     }
+
+    if (const char* v = ArgValue(argc, argv, "--ic4-json")) o.ic4JsonPath = v;
+    if (const char* v = ArgValue(argc, argv, "--ic4-json-device-index")) {
+        o.ic4JsonDeviceIndex = static_cast<std::size_t>(std::strtoull(v, nullptr, 10));
+    }
+    if (HasFlag(argc, argv, "--no-ic4-json")) o.ic4JsonPath.clear();
+
+    if (const char* v = ArgValue(argc, argv, "--offset-x")) o.offsetX = std::atoi(v);
+    if (const char* v = ArgValue(argc, argv, "--offset-y")) o.offsetY = std::atoi(v);
+
     if (const char* v = ArgValue(argc, argv, "--width")) o.width = std::atoi(v);
     if (const char* v = ArgValue(argc, argv, "--height")) o.height = std::atoi(v);
     if (const char* v = ArgValue(argc, argv, "--fps")) o.fps = std::atof(v);
-    if (const char* v = ArgValue(argc, argv, "--format")) o.cameraFormat = ParseCameraFormat(v);
+    if (const char* v = ArgValue(argc, argv, "--format")) {
+        o.cameraFormat = ParseCameraFormat(v);
+        o.formatSpecified = true;
+    }
+
     if (const char* v = ArgValue(argc, argv, "--camera-setup-delay-ms")) o.cameraSetupDelayMs = std::atoi(v);
     if (const char* v = ArgValue(argc, argv, "--camera-open-retries")) o.cameraOpenRetries = std::atoi(v);
     if (const char* v = ArgValue(argc, argv, "--camera-retry-delay-ms")) o.cameraRetryDelayMs = std::atoi(v);
     if (const char* v = ArgValue(argc, argv, "--camera-start-delay-ms")) o.cameraSetupDelayMs = std::atoi(v);
     if (const char* v = ArgValue(argc, argv, "--camera-start-retries")) o.cameraOpenRetries = std::atoi(v);
+
     if (const char* v = ArgValue(argc, argv, "--canvas-width")) o.canvasWidth = std::atoi(v);
     if (const char* v = ArgValue(argc, argv, "--canvas-height")) o.canvasHeight = std::atoi(v);
     if (const char* v = ArgValue(argc, argv, "--sets")) o.maxSets = std::atoi(v);
@@ -125,17 +190,35 @@ Options ParseOptions(int argc, char** argv)
     if (o.cameraOpenRetries < 1) throw std::runtime_error("--camera-open-retries must be >= 1");
     if (o.cameraRetryDelayMs < 0) throw std::runtime_error("--camera-retry-delay-ms must be >= 0");
     if (o.maxTimestampDiffNs == 0) throw std::runtime_error("--max-timestamp-diff-ns must be > 0");
+    if (o.offsetX < 0 || o.offsetY < 0) throw std::runtime_error("Offsets must be >= 0");
+
+    if (!o.ic4JsonPath.empty() && !std::filesystem::exists(o.ic4JsonPath)) {
+        throw std::runtime_error(
+            "IC4 JSON state file was not found: " + o.ic4JsonPath.string() +
+            ". Use --ic4-json PATH or --no-ic4-json.");
+    }
     return o;
 }
 
 IC4Ext::CameraCaptureConfig MakeCameraConfig(const Options& options)
 {
     IC4Ext::CameraCaptureConfig config;
+
+    if (!options.ic4JsonPath.empty()) {
+        config.ic4StateJson.path = options.ic4JsonPath;
+        config.ic4StateJson.deviceIndex = options.ic4JsonDeviceIndex;
+        config.ic4StateJson.strict = false;
+        config.ic4StateJson.applyNestedSelectorStates = true;
+    }
+
     config.streamRequest.width = options.width;
     config.streamRequest.height = options.height;
     config.streamRequest.fps = options.fps;
     config.streamRequest.requestedFormat = options.cameraFormat;
-    config.streamRequest.forceRequestedFormat = true;
+    config.streamRequest.forceRequestedFormat = options.formatSpecified;
+    config.streamRequest.offsetX = options.offsetX;
+    config.streamRequest.offsetY = options.offsetY;
+
     config.outputSpec.outputFormat = IC4Ext::GpuFrameFormat::RGBA8;
     config.queuePolicy = IC4Ext::FrameQueuePolicy::PreserveFrames;
     config.maxPendingBuffers = 32;
@@ -144,9 +227,9 @@ IC4Ext::CameraCaptureConfig MakeCameraConfig(const Options& options)
     if (options.triggerMode == TriggerMode::Hardware) {
         IC4Ext::ConfigureHardwareTriggerSync(config, options.triggerSource);
     } else {
-        // For requested software-trigger operation this is the final configuration.
-        // For requested free-run operation it is only a startup gate: streamSetup can
-        // finish for every camera without the first camera already transferring frames.
+        // For software-trigger operation this is the final configuration.
+        // For free-run operation it is a startup gate: all streamSetup calls can
+        // finish before frame transfer begins.
         auto gate = IC4Ext::MakeSoftwareTriggerSyncConfig();
         gate.setExposureAutoOff = false;
         IC4Ext::ConfigureCameraSync(config, gate);
@@ -267,6 +350,7 @@ cv::Mat CpuFrameToBgr(const IC4Ext::CpuFrame& frame)
     if (frame.format != IC4Ext::CpuFrameFormat::RGBA8) {
         throw std::runtime_error("Sample expects RGBA8 readback");
     }
+
     cv::Mat rgba(static_cast<int>(frame.height),
                  static_cast<int>(frame.width),
                  CV_8UC4,
@@ -303,6 +387,7 @@ void PlaceLetterboxed(const cv::Mat& src, cv::Mat& canvas, const cv::Rect& cell)
                                   static_cast<double>(cell.height) / src.rows);
     const int width = std::max(1, static_cast<int>(std::lround(src.cols * scale)));
     const int height = std::max(1, static_cast<int>(std::lround(src.rows * scale)));
+
     cv::Mat resized;
     cv::resize(src, resized, cv::Size(width, height), 0.0, 0.0, cv::INTER_LINEAR);
     const int x = cell.x + (cell.width - width) / 2;
@@ -337,24 +422,36 @@ int main(int argc, char** argv)
 {
     try {
         const Options options = ParseOptions(argc, argv);
+
         auto core = D3D12CoreLib::D3D12Core::CreateShared();
         auto backend = IC4Ext::D3D12BackendContext::FromCore(core);
         if (!backend.resolve()) throw std::runtime_error("Failed to resolve D3D12 backend");
 
-        std::cout << "Multi-camera two-phase setup: format=" << IC4Ext::ToString(options.cameraFormat)
+        std::cout << "Multi-camera setup:"
+                  << " ic4Json=" << (options.ic4JsonPath.empty() ? "<disabled>" : options.ic4JsonPath.string())
+                  << " jsonDeviceIndex=" << options.ic4JsonDeviceIndex
+                  << " offsetX=" << options.offsetX
+                  << " offsetY=" << options.offsetY
+                  << " formatOverride=" << (options.formatSpecified ? IC4Ext::ToString(options.cameraFormat) : "<json>")
+                  << " widthOverride=" << options.width
+                  << " heightOverride=" << options.height
+                  << " fpsOverride=" << options.fps
                   << " interCameraSetupDelayMs=" << options.cameraSetupDelayMs
                   << " retries=" << options.cameraOpenRetries
                   << " retryDelayMs=" << options.cameraRetryDelayMs
                   << " startupGate=" << (options.triggerMode == TriggerMode::None ? "software-trigger" : "native-trigger")
                   << " syncPolicy=timestamp-nearest"
                   << " timestampSource=host-received"
-                  << " maxTimestampDiffNs=" << options.maxTimestampDiffNs << std::endl;
+                  << " maxTimestampDiffNs=" << options.maxTimestampDiffNs
+                  << std::endl;
 
         std::vector<IC4Ext::D3D12CameraCapture> preparedCaptures;
         preparedCaptures.reserve(options.devices.size());
+
         for (std::size_t i = 0; i < options.devices.size(); ++i) {
             IC4Ext::IC4DeviceSelector selector;
             selector.deviceIndex = options.devices[i];
+
             IC4Ext::D3D12CameraCapture capture;
             const auto config = MakeCameraConfig(options);
             if (!OpenAndPauseCapture(capture, selector, config, backend, i, options.devices[i],
@@ -363,6 +460,7 @@ int main(int argc, char** argv)
                                          " deviceIndex=" + std::to_string(options.devices[i]) +
                                          ": " + capture.lastError().where + ": " + capture.lastError().message);
             }
+
             preparedCaptures.push_back(std::move(capture));
             if (i + 1 < options.devices.size() && options.cameraSetupDelayMs > 0) {
                 std::cout << "Waiting " << options.cameraSetupDelayMs
@@ -374,6 +472,7 @@ int main(int argc, char** argv)
         ThreadKit::Queues::QueueOptions inputOptions;
         inputOptions.maxSize = 128;
         auto inputQueue = std::make_shared<IC4Ext::D3D12IndexedFrameQueue>(inputOptions);
+
         ThreadKit::Queues::QueueOptions outputOptions;
         outputOptions.maxSize = 8;
         auto outputQueue = std::make_shared<IC4Ext::D3D12SyncedFrameQueue>(outputOptions);
@@ -393,6 +492,7 @@ int main(int argc, char** argv)
 
         std::vector<std::unique_ptr<IC4Ext::D3D12CameraCaptureThread>> cameras;
         cameras.reserve(preparedCaptures.size());
+
         IC4Ext::CameraThreadOptions threadOptions;
         threadOptions.readTimeoutMs = 1000;
         threadOptions.copyPerOutputQueue = false;
@@ -446,11 +546,17 @@ int main(int argc, char** argv)
         cv::VideoWriter writer;
         if (!options.recordPath.empty()) {
             const double recordFps = options.fps > 0.0 ? options.fps : 30.0;
-            writer.open(options.recordPath.string(), cv::VideoWriter::fourcc('a', 'v', 'c', '1'),
-                        recordFps, canvas.size(), true);
+            writer.open(options.recordPath.string(),
+                        cv::VideoWriter::fourcc('a', 'v', 'c', '1'),
+                        recordFps,
+                        canvas.size(),
+                        true);
             if (!writer.isOpened()) {
-                writer.open(options.recordPath.string(), cv::VideoWriter::fourcc('m', 'p', '4', 'v'),
-                            recordFps, canvas.size(), true);
+                writer.open(options.recordPath.string(),
+                            cv::VideoWriter::fourcc('m', 'p', '4', 'v'),
+                            recordFps,
+                            canvas.size(),
+                            true);
             }
             if (!writer.isOpened()) throw std::runtime_error("Failed to open VideoWriter");
         }
@@ -484,6 +590,7 @@ int main(int argc, char** argv)
             canvas.setTo(cv::Scalar(16, 16, 16));
             for (const auto& indexed : set->frames) {
                 if (indexed.cameraIndex >= readbacks.size()) continue;
+
                 IC4Ext::CpuFrame cpu;
                 auto& readback = readbacks[indexed.cameraIndex];
                 if (!readback.readback(indexed.frame, IC4Ext::CpuFrameFormat::RGBA8, cpu, 5000)) {
@@ -491,15 +598,18 @@ int main(int argc, char** argv)
                 }
 
                 cv::Mat bgr = CpuFrameToBgr(cpu);
-                AnalyzeAndAnnotate(bgr, motionStates[indexed.cameraIndex],
+                AnalyzeAndAnnotate(bgr,
+                                   motionStates[indexed.cameraIndex],
                                    options.devices[indexed.cameraIndex],
-                                   options.motionThreshold, options.minMotionArea);
+                                   options.motionThreshold,
+                                   options.minMotionArea);
 
                 const int column = static_cast<int>(indexed.cameraIndex) % grid.columns;
                 const int row = static_cast<int>(indexed.cameraIndex) / grid.columns;
                 const cv::Rect cell(grid.gap + column * (cellWidth + grid.gap),
                                     grid.gap + row * (cellHeight + grid.gap),
-                                    cellWidth, cellHeight);
+                                    cellWidth,
+                                    cellHeight);
                 PlaceLetterboxed(bgr, canvas, cell);
             }
 
