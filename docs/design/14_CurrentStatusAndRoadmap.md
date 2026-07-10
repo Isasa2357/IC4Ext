@@ -12,6 +12,7 @@ CameraStreamRequest
 FrameTiming
 FrameFormatMetadata
 FrameChunkMetadata
+FrameReadbackCacheStats
 CpuFrame
 ErrorInfo
 backend selection macros
@@ -30,6 +31,8 @@ D3D11DummyCameraCaptureGenerator
 D3D11FrameReadback
 ```
 
+`D3D11FrameReadback` は staging texture を size / format / subresource layout ごとに cache し、同一形状の連続 readback では staging texture を再利用します。`cacheStats()` と `resetCache()` で確認・解放できます。
+
 ### D3D12
 
 ```txt
@@ -45,6 +48,8 @@ D3D12FrameReadback
 ```
 
 D3D12 backend は D3D12Helper 統合済みです。
+
+`D3D12FrameReadback` は必要サイズ以上の readback buffer を保持し、同一またはより小さい footprint の連続 readback では buffer を再利用します。`cacheStats()` と `resetCache()` で確認・解放できます。
 
 ### Chunk metadata
 
@@ -127,20 +132,7 @@ MJPG / NV12
 
 方針として、必要になったら追加します。最初に追加するなら `Mono16` / `Bayer*16` が安全です。packed format は bit unpack test を先に用意してから追加します。
 
-### 3. Readback performance optimization
-
-readback API は実装済みですが、高 fps で毎 frame readback する用途向けの resource reuse はまだです。
-
-候補:
-
-```txt
-D3D11 staging texture cache
-D3D12 readback buffer cache
-readback ring
-size/format ごとの resource reuse
-```
-
-### 4. Long-run / high-fps stress test
+### 3. Long-run / high-fps stress test
 
 基本 smoke/staged test は増やしましたが、長時間・高fps前提の stress test はまだです。
 
@@ -158,7 +150,7 @@ GPU memory growth
 fence wait stall
 ```
 
-### 5. Real-camera readback integration test
+### 4. Real-camera readback integration test
 
 synthetic texture readback test はありますが、実カメラから取得した frame を readback する optional integration test はまだありません。
 
@@ -170,8 +162,7 @@ synthetic texture readback test はありますが、実カメラから取得し
 1. D3D12-D3D11 interop
 2. Long-run / high-fps stress tests
 3. Real-camera readback integration test
-4. Readback resource reuse optimization
-5. Pixel format expansion if needed
+4. Pixel format expansion if needed
 ```
 
-現在の実装では chunk metadata まで入ったため、次に大きく残っている機能は D3D12-D3D11 interop です。
+現在の実装では chunk metadata と readback resource reuse まで入ったため、次に大きく残っている機能は D3D12-D3D11 interop です。
