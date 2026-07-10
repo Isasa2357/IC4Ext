@@ -6,41 +6,58 @@
 
 ```text
 free-run + HostReceived : 利用可能。標準許容差10 ms
-HW trigger + Line1      : 推奨。160 fps、許容差4 msで長時間動作を確認
+HW trigger + Line1      : 推奨。160 fps、許容差4 msで実機確認済み
 SW trigger              : 実験的。安定同期を確認できていないため非推奨
 ```
 
-HW条件では、両カメラのread errorが0のまま8.5万組以上を生成し、同期dropは起動時の位置合わせ後ほぼ一定でした。
-
-ここでいう4 msは`HostReceived`によるフレーム対応付けの許容差であり、露光開始時刻そのものの差を4 ms以内と保証する値ではありません。
-
-## 正式なdeferred acquisition
-
-全カメラのstreamを先に準備し、worker threadと同期threadが準備できてから取得を開始します。
+検証済みHW条件では、次の結果を確認しています。
 
 ```text
-camera 0: deviceOpen + streamSetup(DeferAcquisitionStart)
-camera 1: deviceOpen + streamSetup(DeferAcquisitionStart)
+Camera model         : DFK 33UX252 x2
+Resolution           : 1536 x 1536
+PixelFormat          : BayerRG8
+Requested frame rate : 160 fps
+OffsetX / OffsetY    : 236 / 0
+Trigger source       : Line1
+Frame matching       : TimestampNearest
+Timestamp source     : HostReceived
+Tolerance            : 4,000,000 ns
+Validated sets       : 1,000
+Maximum observed diff: 438,100 ns
+syncDropped          : 1
+camera0 read          : 1,002
+camera1 read          : 1,002
+camera0/1 timeouts   : 0 / 0
+camera0/1 errors     : 0 / 0
+```
+
+さらに、同条件で8.5万組以上の長時間動作も確認しています。ここでいう4 msは`HostReceived`によるフレーム対応付けの許容差であり、露光開始時刻そのものの差を4 ms以内と保証する値ではありません。
+
+## 検証済みmulti-camera acquisition lifecycle
+
+現在のDFK 33UX252とIC4 1.6.0.894では、`DeferAcquisitionStart`経路で2台目が安定してフレームを出さない場合がありました。そのため、実運用サンプルでは次の互換prepare-stop方式を使用します。
+
+```text
+camera 0: 通常のstreamSetupでopen
+camera 0: AcquisitionStop command
+camera 1: 通常のstreamSetupでopen
+camera 1: AcquisitionStop command
 ...
+sync threadを開始
 全camera worker threadを開始
-D3D12FrameSyncThreadを開始
-全camera: startAcquisition()
+全camera: AcquisitionStart command
 ```
 
-サンプルでは次を設定します。
-
-```cpp
-config.acquisitionStartMode = IC4Ext::AcquisitionStartMode::Deferred;
-```
-
-起動後は型付きAPIを使います。
+公開APIからは文字列commandを直接呼ばず、型付きAPIを使用します。
 
 ```cpp
 cameraThread.startAcquisition();
 cameraThread.stopAcquisition();
 ```
 
-従来の`open()`直後に`AcquisitionStop`文字列commandを送る回避処理は使用しません。
+D3D11/D3D12のIC4Ext所有captureでは、workerのblocking readが制御commandを妨げないようにしています。これにより、両カメラをほぼ同時に再開でき、起動時dropを1まで抑えた実機結果を確認しています。
+
+`AcquisitionStartMode::Deferred`は実験的APIとして残していますが、現在の実機構成では推奨しません。
 
 ## 標準カメラ設定
 
@@ -77,7 +94,7 @@ OffsetY          = 0
 各フレームをPCが受信した`std::chrono::steady_clock`時刻を比較します。
 
 ```text
-FrameSyncPolicy        = TimestampNearest
+FrameSyncPolicy          = TimestampNearest
 FrameSyncTimestampSource = HostReceived
 ```
 
@@ -186,6 +203,7 @@ syncDropped
 syncIgnored
 cameraN.read
 cameraN.pushed
+cameraN.timeouts
 cameraN.errors
 ```
 
