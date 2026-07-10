@@ -38,25 +38,28 @@ camera 1 frame -> hostReceivedTime
 
 IC4Ext本体の `FrameNumberExact` 機能は残っているため、frame counterが同じ基準に揃っていることを保証できる別用途では引き続き利用できます。
 
-## 複数カメラの二段階起動
+## 複数カメラの起動ゲート
 
-複数の USB カメラを、1台ずつ完全に取得開始する方式では、1台目の転送中に2台目が `PayloadSize` を問い合わせて timeout する場合があります。
+free-runのカメラを1台ずつ通常起動すると、1台目の画像転送中に2台目が `PayloadSize` を問い合わせ、USB3Visionのcontrol transferがtimeoutする場合があります。
 
-このサンプルでは次の順で起動します。
+このサンプルは、`--trigger-mode none` の場合もstream準備中だけ一時的にSoftware Triggerを有効化します。これにより、`streamSetup`は完了してもTriggerSoftwareが送られるまでは画像転送が始まりません。
 
 ```text
+camera 0: Software Triggerを一時設定
 camera 0: deviceOpen + streamSetup
 camera 0: AcquisitionStop
+camera 1: Software Triggerを一時設定
 camera 1: deviceOpen + streamSetup
 camera 1: AcquisitionStop
 ...
-全 camera thread / sync thread を開始
+全 camera worker / sync threadを開始
+全 camera: TriggerMode=Off
 全 camera: AcquisitionStart
 ```
 
-これにより、各カメラが `PayloadSize` を問い合わせる時点では、準備済みの他カメラは acquisition-paused の状態になります。
+`TriggerMode=Off`へ戻した後は通常のfree-runです。露出auto設定は起動ゲートによって変更しません。
 
-`D3D12CameraCapture::open()` は現状 `AcquisitionStart` まで行うため、サンプルでは直後に `AcquisitionStop` command を実行して全台の準備完了を待ちます。
+`--trigger-mode software`または`hardware`の場合は、指定されたtrigger設定そのものが起動ゲートになるため、free-run用の解除処理は行いません。
 
 ## ビルド
 
@@ -148,8 +151,10 @@ cameraN.errors
 ## 処理経路
 
 ```text
-IC4 camera stream setup (acquisition paused)
+IC4 camera stream setup (software-trigger gated or native-trigger gated)
+  -> acquisition paused
   -> all camera worker threads ready
+  -> free-run only: TriggerMode=Off
   -> all camera AcquisitionStart
   -> D3D12CameraCaptureThread
   -> hostReceivedTime
@@ -167,7 +172,7 @@ IC4 camera stream setup (acquisition paused)
 
 ## PayloadSize timeoutが残る場合
 
-二段階起動後もtimeoutする場合は、次を確認します。
+起動ゲート後もtimeoutする場合は、次を確認します。
 
 - 2台を別のUSB host controllerへ接続する
 - USB hubを介さず直接接続する
