@@ -116,15 +116,19 @@ bool D3D11FrameReadback::readback(const D3D11CameraFrame& frame,
                 return false;
             }
             const auto& plane = image.planes[0];
-            return ConvertPackedGpuFrameToCpuFrame(image.pixels.data() + plane.offsetBytes,
-                                                   image.width,
-                                                   image.height,
-                                                   plane.rowPitch,
-                                                   srcFormat,
-                                                   dstFormat,
-                                                   frame.timing,
-                                                   out,
-                                                   &lastError_);
+            const bool ok = ConvertPackedGpuFrameToCpuFrame(image.pixels.data() + plane.offsetBytes,
+                                                           image.width,
+                                                           image.height,
+                                                           plane.rowPitch,
+                                                           srcFormat,
+                                                           dstFormat,
+                                                           frame.timing,
+                                                           out,
+                                                           &lastError_);
+            if (ok) {
+                out.chunkMetadata = frame.chunkMetadata;
+            }
+            return ok;
         } catch (const std::exception& e) {
             setError(ErrorCode::D3D11Error, "D3D11FrameReadback::ReadbackTexture2DToCpuImage", e.what());
             return false;
@@ -164,6 +168,9 @@ bool D3D11FrameReadback::readback(const D3D11CameraFrame& frame,
                                                     out,
                                                     &lastError_);
     context_->Unmap(staging.Get(), 0);
+    if (ok) {
+        out.chunkMetadata = frame.chunkMetadata;
+    }
     return ok;
 }
 
