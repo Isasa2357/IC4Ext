@@ -36,19 +36,6 @@ public:
     virtual bool setIC4Property(const std::string& propertyName, const char* value) = 0;
     virtual bool setIC4Property(const std::string& propertyName, const std::string& value) = 0;
 
-    virtual bool startAcquisition()
-    {
-        return setIC4Property("AcquisitionStart", std::string("execute"));
-    }
-
-    virtual bool stopAcquisition()
-    {
-        return setIC4Property("AcquisitionStop", std::string("execute"));
-    }
-
-    virtual bool isStreaming() const noexcept { return isOpened(); }
-    virtual bool isAcquisitionActive() const noexcept { return isOpened(); }
-
     virtual bool setFrameRate(double fps) = 0;
     virtual bool setExposureAuto(const std::string& mode) = 0;
     virtual bool setExposureTime(double exposureTimeUs) = 0;
