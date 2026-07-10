@@ -295,7 +295,7 @@ void D3D12FrameSyncThread::tryEmitTimestampNearestSets()
         CameraBuffer* minBuffer = nullptr;
 
         for (auto& buffer : buffers_) {
-            const std::uint64_t ts = SyncTimestampNs(buffer.frames.front());
+            const std::uint64_t ts = syncTimestampNs(buffer.frames.front());
             if (ts < minTs) {
                 minTs = ts;
                 minBuffer = &buffer;
@@ -334,11 +334,8 @@ bool D3D12FrameSyncThread::emitFrontSet()
     return IsQueuePushSucceeded(result);
 }
 
-std::uint64_t D3D12FrameSyncThread::SyncTimestampNs(const D3D12IndexedCameraFrame& frame) noexcept
+std::uint64_t D3D12FrameSyncThread::hostTimestampNs(const D3D12IndexedCameraFrame& frame) noexcept
 {
-    if (frame.frame.timing.deviceTimestampNs != 0) {
-        return frame.frame.timing.deviceTimestampNs;
-    }
     const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
         frame.frame.timing.hostReceivedTime.time_since_epoch()).count();
     if (ns <= 0) {
@@ -347,5 +344,23 @@ std::uint64_t D3D12FrameSyncThread::SyncTimestampNs(const D3D12IndexedCameraFram
     return static_cast<std::uint64_t>(ns);
 }
 
+std::uint64_t D3D12FrameSyncThread::syncTimestampNs(const D3D12IndexedCameraFrame& frame) const noexcept
+{
+    const std::uint64_t hostNs = hostTimestampNs(frame);
+    const std::uint64_t deviceNs = frame.frame.timing.deviceTimestampNs;
+
+    switch (options_.timestampSource) {
+    case FrameSyncTimestampSource::HostReceived:
+        return hostNs;
+    case FrameSyncTimestampSource::Device:
+        return deviceNs;
+    case FrameSyncTimestampSource::Auto:
+    default:
+        // Independent cameras often expose free-running timestamp counters with
+        // unrelated epochs. hostReceivedTime is recorded in one process-wide
+        // steady-clock domain and is therefore the safe automatic comparison basis.
+        return hostNs != 0 ? hostNs : deviceNs;
+    }
+}
 
 } // namespace IC4Ext
