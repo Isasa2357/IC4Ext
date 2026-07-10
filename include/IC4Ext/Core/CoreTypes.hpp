@@ -57,6 +57,15 @@ struct FrameChunkMetadata
     }
 };
 
+struct FrameReadbackCacheStats
+{
+    std::uint64_t readbacks = 0;
+    std::uint64_t cacheHits = 0;
+    std::uint64_t cacheMisses = 0;
+    std::uint64_t resourceRebuilds = 0;
+    std::uint64_t bytesAllocated = 0;
+};
+
 struct CameraCaptureStats
 {
     std::uint64_t receivedBuffers = 0;
