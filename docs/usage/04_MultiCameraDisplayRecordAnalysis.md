@@ -66,6 +66,54 @@ capture.softwareTrigger();
 
 複数台へ順番に command を送るため、SW trigger は厳密な同時露光を保証しません。実際の timestamp 差を計測してください。
 
+## 複数カメラの安全な起動
+
+`D3D12CameraCaptureThread::start()` は内部でカメラをopenし、IC4の `streamSetup(... AcquisitionStart)` まで実行します。この間、IC4はカメラから `PayloadSize` などを問い合わせます。
+
+1台目を高帯域でstreamingした直後に2台目を初期化すると、USB controller、USB hub、camera transportの状態によっては次のtimeoutが発生することがあります。
+
+```text
+Failed to query payload size from device
+PayloadSize read failed (...: Timeout)
+```
+
+複数カメラサンプルでは次を行います。
+
+```text
+カメラを1台ずつ順番に起動
+起動間に待機時間を入れる
+起動失敗時に再試行する
+slot / deviceIndex / attempt番号をログへ出す
+raw Bayer / Mono入力を選択可能にする
+```
+
+解析サンプルの既定値は次です。
+
+```text
+format                 = BayerRG8
+camera-start-delay-ms  = 2000
+camera-start-retries   = 3
+camera-retry-delay-ms  = 3000
+```
+
+高解像度・高fpsのUSBカメラを2台使用する場合は、まず安全側で次を指定してください。
+
+```bat
+--format BayerRG8 --camera-start-delay-ms 5000 --camera-start-retries 3 --camera-retry-delay-ms 5000 --width 1280 --height 720 --fps 30
+```
+
+`BGR8` は3 byte/pixelのため、raw BayerまたはMono入力より転送量が増えます。カメラが対応している場合、複数台では `BayerRG8` などの1 byte/pixel formatを優先してください。
+
+同じtimeoutが続く場合は、次を確認します。
+
+```text
+2台を別のUSB controllerへ接続する
+USB hubを避けてPCへ直接接続する
+解像度またはfpsを下げる
+カメラが実際に対応するPixelFormatを指定する
+1台ずつ単独起動して正常性を確認する
+```
+
 ## 同期 thread
 
 ```cpp
@@ -131,21 +179,24 @@ Regions   : 動領域数
 
 ### ビルド
 
+vcpkgを使用する場合:
+
 ```bat
 -DIC4EXT_BUILD_OPENCV_ANALYSIS_SAMPLE:BOOL=ON
--DOpenCV_DIR:PATH=C:\path\to\opencv\build
+-DCMAKE_TOOLCHAIN_FILE:FILEPATH=%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake
+-DVCPKG_TARGET_TRIPLET:STRING=x64-windows
 ```
 
 ### 実行
 
 ```bat
-MultiCameraAnalysisDisplayD3D12.exe --devices 0,1 --trigger-mode none --sync-policy timestamp
+MultiCameraAnalysisDisplayD3D12.exe --devices 0,1 --trigger-mode none --sync-policy timestamp --format BayerRG8 --camera-start-delay-ms 5000 --max-timestamp-diff-ns 100000000
 ```
 
 録画も行う場合:
 
 ```bat
-MultiCameraAnalysisDisplayD3D12.exe --devices 0,1 --trigger-mode hardware --trigger-source Line1 --sync-policy frame-number --fps 60 --canvas-width 1920 --canvas-height 1080 --motion-threshold 24 --min-motion-area 400 --record analyzed_sync.mp4
+MultiCameraAnalysisDisplayD3D12.exe --devices 0,1 --trigger-mode hardware --trigger-source Line1 --sync-policy frame-number --format BayerRG8 --camera-start-delay-ms 5000 --fps 60 --canvas-width 1920 --canvas-height 1080 --motion-threshold 24 --min-motion-area 400 --record analyzed_sync.mp4
 ```
 
 ## 性能上の注意
@@ -165,6 +216,8 @@ GPU capture
 ## 実機確認項目
 
 ```text
+各カメラを単独でopenできるか
+複数カメラ起動時にPayloadSize timeoutが発生しないか
 TriggerSource の実機名が正しいか
 TriggerSoftware command が実行できるか
 frame number / timestamp 差が期待範囲か
