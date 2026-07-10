@@ -4,7 +4,9 @@
 #include <ic4/ic4.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -27,6 +29,22 @@ inline int EnvInt(const char* name, int fallback)
 {
     if (const char* value = Env(name)) return std::atoi(value);
     return fallback;
+}
+
+inline std::uint64_t EnvUInt64(const char* name, std::uint64_t fallback)
+{
+    const char* value = Env(name);
+    if (!value || !*value) return fallback;
+
+    errno = 0;
+    char* end = nullptr;
+    const unsigned long long parsed = std::strtoull(value, &end, 10);
+    if (errno == ERANGE || end == value || (end && *end != '\0')) {
+        std::cerr << "Invalid unsigned 64-bit environment value " << name
+                  << "='" << value << "'; using fallback=" << fallback << "\n";
+        return fallback;
+    }
+    return static_cast<std::uint64_t>(parsed);
 }
 
 inline double EnvDouble(const char* name, double fallback)
