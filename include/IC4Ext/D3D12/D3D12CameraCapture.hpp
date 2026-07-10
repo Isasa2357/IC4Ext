@@ -53,6 +53,11 @@ public:
     void close() noexcept;
     bool isOpened() const noexcept override { return opened_.load(); }
 
+    bool startAcquisition() override;
+    bool stopAcquisition() override;
+    bool isStreaming() const noexcept override;
+    bool isAcquisitionActive() const noexcept override;
+
     D3D12ReadResult read(ReadMode mode = ReadMode::LatestFrame) override;
     D3D12ReadResult read(const CameraReadOptions& options) override;
 
