@@ -134,6 +134,7 @@ bool D3D11FrameCopier::copyFrame(const D3D11CameraFrame& src, D3D11CameraFrame& 
     }
     dst.timing = src.timing;
     dst.format = src.format;
+    dst.chunkMetadata = src.chunkMetadata;
     return true;
 }
 
