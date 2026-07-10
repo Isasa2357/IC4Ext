@@ -6,16 +6,21 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <exception>
+#include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace {
 
-constexpr const char* kBuildMarker = "camera2plus-command-lifecycle-v5";
+constexpr const char* kBuildMarker = "camera2plus-command-lifecycle-v6-latency";
 
 std::uint64_t HostTimestampNs(const IC4Ext::D3D12IndexedCameraFrame& frame)
 {
@@ -29,6 +34,200 @@ std::uint64_t AbsDiff(std::uint64_t lhs, std::uint64_t rhs)
     return lhs >= rhs ? lhs - rhs : rhs - lhs;
 }
 
+bool DurationNs(std::chrono::steady_clock::time_point later,
+                std::chrono::steady_clock::time_point earlier,
+                std::uint64_t& output) noexcept
+{
+    const auto value =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(later - earlier).count();
+    if (value < 0) return false;
+    output = static_cast<std::uint64_t>(value);
+    return true;
+}
+
+struct DistributionSummary
+{
+    std::size_t count = 0;
+    double meanNs = 0.0;
+    std::uint64_t minimumNs = 0;
+    std::uint64_t p50Ns = 0;
+    std::uint64_t p95Ns = 0;
+    std::uint64_t p99Ns = 0;
+    std::uint64_t maximumNs = 0;
+};
+
+std::uint64_t PercentileNearestRank(const std::vector<std::uint64_t>& sorted,
+                                    double fraction)
+{
+    if (sorted.empty()) return 0;
+    const double clamped = std::clamp(fraction, 0.0, 1.0);
+    if (clamped <= 0.0) return sorted.front();
+
+    const auto rank = static_cast<std::size_t>(
+        std::ceil(clamped * static_cast<double>(sorted.size())));
+    const auto index = std::min(sorted.size() - 1, rank > 0 ? rank - 1 : 0);
+    return sorted[index];
+}
+
+DistributionSummary Summarize(const std::vector<std::uint64_t>& values)
+{
+    DistributionSummary summary;
+    if (values.empty()) return summary;
+
+    std::vector<std::uint64_t> sorted = values;
+    std::sort(sorted.begin(), sorted.end());
+
+    long double total = 0.0L;
+    for (const auto value : sorted) total += static_cast<long double>(value);
+
+    summary.count = sorted.size();
+    summary.meanNs = static_cast<double>(total / static_cast<long double>(sorted.size()));
+    summary.minimumNs = sorted.front();
+    summary.p50Ns = PercentileNearestRank(sorted, 0.50);
+    summary.p95Ns = PercentileNearestRank(sorted, 0.95);
+    summary.p99Ns = PercentileNearestRank(sorted, 0.99);
+    summary.maximumNs = sorted.back();
+    return summary;
+}
+
+void PrintDistribution(const char* name, const std::vector<std::uint64_t>& values)
+{
+    const auto summary = Summarize(values);
+    std::ostringstream stream;
+    stream << std::fixed << std::setprecision(3)
+           << "[latency] " << name
+           << " count=" << summary.count
+           << " meanUs=" << summary.meanNs / 1'000.0
+           << " minUs=" << static_cast<double>(summary.minimumNs) / 1'000.0
+           << " p50Us=" << static_cast<double>(summary.p50Ns) / 1'000.0
+           << " p95Us=" << static_cast<double>(summary.p95Ns) / 1'000.0
+           << " p99Us=" << static_cast<double>(summary.p99Ns) / 1'000.0
+           << " maxUs=" << static_cast<double>(summary.maximumNs) / 1'000.0;
+    std::cout << stream.str() << std::endl;
+}
+
+struct LatencySample
+{
+    std::uint64_t hostPairDiffNs = 0;
+    std::uint64_t camera0HostToEmitNs = 0;
+    std::uint64_t camera1HostToEmitNs = 0;
+    std::uint64_t oldestHostToEmitNs = 0;
+    std::uint64_t latestHostToEmitNs = 0;
+    std::uint64_t emitToPopNs = 0;
+};
+
+struct LatencyCollector
+{
+    std::vector<std::uint64_t> hostPairDiffNs;
+    std::vector<std::uint64_t> camera0HostToEmitNs;
+    std::vector<std::uint64_t> camera1HostToEmitNs;
+    std::vector<std::uint64_t> oldestHostToEmitNs;
+    std::vector<std::uint64_t> latestHostToEmitNs;
+    std::vector<std::uint64_t> emitToPopNs;
+
+    void reserve(std::size_t count)
+    {
+        hostPairDiffNs.reserve(count);
+        camera0HostToEmitNs.reserve(count);
+        camera1HostToEmitNs.reserve(count);
+        oldestHostToEmitNs.reserve(count);
+        latestHostToEmitNs.reserve(count);
+        emitToPopNs.reserve(count);
+    }
+
+    void add(const LatencySample& sample)
+    {
+        hostPairDiffNs.push_back(sample.hostPairDiffNs);
+        camera0HostToEmitNs.push_back(sample.camera0HostToEmitNs);
+        camera1HostToEmitNs.push_back(sample.camera1HostToEmitNs);
+        oldestHostToEmitNs.push_back(sample.oldestHostToEmitNs);
+        latestHostToEmitNs.push_back(sample.latestHostToEmitNs);
+        emitToPopNs.push_back(sample.emitToPopNs);
+    }
+
+    void print() const
+    {
+        PrintDistribution("host_pair_diff", hostPairDiffNs);
+        PrintDistribution("camera0_host_received_to_sync_emit", camera0HostToEmitNs);
+        PrintDistribution("camera1_host_received_to_sync_emit", camera1HostToEmitNs);
+        PrintDistribution("oldest_host_received_to_sync_emit", oldestHostToEmitNs);
+        PrintDistribution("latest_host_received_to_sync_emit", latestHostToEmitNs);
+        PrintDistribution("sync_emit_to_test_pop", emitToPopNs);
+    }
+};
+
+bool BuildLatencySample(const IC4Ext::D3D12SyncedFrameSet& set,
+                        const IC4Ext::D3D12IndexedCameraFrame& frame0,
+                        const IC4Ext::D3D12IndexedCameraFrame& frame1,
+                        std::chrono::steady_clock::time_point popTime,
+                        LatencySample& sample,
+                        std::string& failure)
+{
+    const auto host0 = frame0.frame.timing.hostReceivedTime;
+    const auto host1 = frame1.frame.timing.hostReceivedTime;
+    const auto emitted = set.emittedTime;
+
+    if (host0 == std::chrono::steady_clock::time_point{} ||
+        host1 == std::chrono::steady_clock::time_point{}) {
+        failure = "Synced set has no host receive timestamp";
+        return false;
+    }
+    if (emitted == std::chrono::steady_clock::time_point{}) {
+        failure = "Synced set has no emitted timestamp";
+        return false;
+    }
+
+    if (!DurationNs(emitted, host0, sample.camera0HostToEmitNs) ||
+        !DurationNs(emitted, host1, sample.camera1HostToEmitNs)) {
+        failure = "Sync emitted timestamp precedes host receive timestamp";
+        return false;
+    }
+    if (!DurationNs(popTime, emitted, sample.emitToPopNs)) {
+        failure = "Test pop timestamp precedes sync emitted timestamp";
+        return false;
+    }
+
+    const std::uint64_t timestamp0 = HostTimestampNs(frame0);
+    const std::uint64_t timestamp1 = HostTimestampNs(frame1);
+    if (timestamp0 == 0 || timestamp1 == 0) {
+        failure = "Synced set has no host receive timestamp";
+        return false;
+    }
+
+    sample.hostPairDiffNs = AbsDiff(timestamp0, timestamp1);
+    sample.oldestHostToEmitNs =
+        std::max(sample.camera0HostToEmitNs, sample.camera1HostToEmitNs);
+    sample.latestHostToEmitNs =
+        std::min(sample.camera0HostToEmitNs, sample.camera1HostToEmitNs);
+    return true;
+}
+
+void WriteLatencyCsvHeader(std::ofstream& stream)
+{
+    stream << "sampleIndex,syncGroupId,camera0FrameNumber,camera1FrameNumber,"
+              "hostPairDiffNs,camera0HostToEmitNs,camera1HostToEmitNs,"
+              "oldestHostToEmitNs,latestHostToEmitNs,emitToPopNs\n";
+}
+
+void WriteLatencyCsvRow(std::ofstream& stream,
+                        int sampleIndex,
+                        const IC4Ext::D3D12SyncedFrameSet& set,
+                        const IC4Ext::D3D12IndexedCameraFrame& frame0,
+                        const IC4Ext::D3D12IndexedCameraFrame& frame1,
+                        const LatencySample& sample)
+{
+    stream << sampleIndex << ','
+           << set.syncGroupId << ','
+           << frame0.frame.timing.frameNumber << ','
+           << frame1.frame.timing.frameNumber << ','
+           << sample.hostPairDiffNs << ','
+           << sample.camera0HostToEmitNs << ','
+           << sample.camera1HostToEmitNs << ','
+           << sample.oldestHostToEmitNs << ','
+           << sample.latestHostToEmitNs << ','
+           << sample.emitToPopNs << '\n';
+}
+
 void PrintStage(const char* stage)
 {
     std::cerr << "[camera2plus] " << stage << std::endl;
@@ -37,12 +236,14 @@ void PrintStage(const char* stage)
 void PrintStats(const IC4Ext::D3D12CameraCaptureThread& camera0,
                 const IC4Ext::D3D12CameraCaptureThread& camera1,
                 const IC4Ext::D3D12FrameSyncThread& sync,
-                int receivedSets)
+                int measuredSets,
+                int warmupSets)
 {
     const auto stats0 = camera0.stats();
     const auto stats1 = camera1.stats();
     const auto syncStats = sync.stats();
-    std::cerr << "[camera2plus] sets=" << receivedSets
+    std::cerr << "[camera2plus] measuredSets=" << measuredSets
+              << " warmupSets=" << warmupSets
               << " syncInput=" << syncStats.inputFrames
               << " syncEmitted=" << syncStats.emittedSets
               << " syncDropped=" << syncStats.droppedFrames
@@ -94,6 +295,8 @@ int main()
         hardwareTrigger ? 4'000'000ull : 10'000'000ull);
     const int targetSets =
         std::max(1, IC4ExtTest::EnvInt("IC4EXT_TEST_SYNC_SETS", 100));
+    const int latencyWarmupSets =
+        std::max(0, IC4ExtTest::EnvInt("IC4EXT_TEST_LATENCY_WARMUP_SETS", 100));
     const int timeoutSeconds =
         std::max(5, IC4ExtTest::EnvInt("IC4EXT_TEST_SYNC_TIMEOUT_SECONDS", 30));
     const int interCameraDelayMs =
@@ -101,13 +304,30 @@ int main()
     const unsigned readyTimeoutMs = static_cast<unsigned>(
         std::max(1000, IC4ExtTest::EnvInt("IC4EXT_TEST_GPU_READY_TIMEOUT_MS", 5000)));
 
+    std::string latencyCsvPath;
+    if (const char* path = IC4ExtTest::Env("IC4EXT_TEST_LATENCY_CSV")) {
+        latencyCsvPath = path;
+    }
+
+    std::ofstream latencyCsv;
+    if (!latencyCsvPath.empty()) {
+        latencyCsv.open(latencyCsvPath, std::ios::out | std::ios::trunc);
+        if (!latencyCsv) {
+            std::cerr << "Failed to open latency CSV: " << latencyCsvPath << "\n";
+            return 1;
+        }
+        WriteLatencyCsvHeader(latencyCsv);
+    }
+
     std::cerr << "[camera2plus] mode=" << (hardwareTrigger ? "hardware" : "free-run")
               << " triggerSource=" << triggerSource
               << " toleranceNs=" << toleranceNs
               << " targetSets=" << targetSets
+              << " latencyWarmupSets=" << latencyWarmupSets
               << " timeoutSeconds=" << timeoutSeconds
               << " interCameraDelayMs=" << interCameraDelayMs
               << " readyTimeoutMs=" << readyTimeoutMs
+              << " latencyCsv=" << (latencyCsvPath.empty() ? "<disabled>" : latencyCsvPath)
               << std::endl;
 
     auto config0 = IC4ExtTest::MakeCameraConfig("d3d12", 0);
@@ -247,20 +467,24 @@ int main()
     }
 
     int receivedSets = 0;
+    int completedWarmupSets = 0;
     std::uint64_t maximumObservedDiffNs = 0;
     std::string validationFailure;
+    LatencyCollector latency;
+    latency.reserve(static_cast<std::size_t>(targetSets));
+
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSeconds);
     auto nextStatsPrint = std::chrono::steady_clock::now() + std::chrono::seconds(1);
 
-    PrintStage("collecting synchronized sets immediately");
+    PrintStage("collecting synchronized sets and latency samples");
     while (receivedSets < targetSets && std::chrono::steady_clock::now() < deadline) {
         auto set = outputQueue->waitPopFor(std::chrono::milliseconds(200));
+        const auto popTime = std::chrono::steady_clock::now();
 
-        const auto now = std::chrono::steady_clock::now();
-        if (now >= nextStatsPrint) {
-            PrintStats(camera0, camera1, sync, receivedSets);
-            nextStatsPrint = now + std::chrono::seconds(1);
+        if (popTime >= nextStatsPrint) {
+            PrintStats(camera0, camera1, sync, receivedSets, completedWarmupSets);
+            nextStatsPrint = popTime + std::chrono::seconds(1);
         }
 
         if (!set) continue;
@@ -313,6 +537,22 @@ int main()
             std::cerr << validationFailure << "\n";
             break;
         }
+
+        LatencySample sample;
+        if (!BuildLatencySample(*set, *frame0, *frame1, popTime, sample, validationFailure)) {
+            std::cerr << validationFailure << "\n";
+            break;
+        }
+
+        maximumObservedDiffNs = std::max(maximumObservedDiffNs, sample.hostPairDiffNs);
+        if (sample.hostPairDiffNs > toleranceNs) {
+            validationFailure = "Host timestamp difference exceeded tolerance: diff=" +
+                                std::to_string(sample.hostPairDiffNs) +
+                                " tolerance=" + std::to_string(toleranceNs);
+            std::cerr << validationFailure << "\n";
+            break;
+        }
+
         if (!frame0->frame.ready.wait(readyTimeoutMs) ||
             !frame1->frame.ready.wait(readyTimeoutMs)) {
             validationFailure = "Timed out waiting for synchronized GPU frames";
@@ -320,28 +560,28 @@ int main()
             break;
         }
 
-        const std::uint64_t timestamp0 = HostTimestampNs(*frame0);
-        const std::uint64_t timestamp1 = HostTimestampNs(*frame1);
-        if (timestamp0 == 0 || timestamp1 == 0) {
-            validationFailure = "Synced set has no host receive timestamp";
-            std::cerr << validationFailure << "\n";
-            break;
+        if (completedWarmupSets < latencyWarmupSets) {
+            ++completedWarmupSets;
+            continue;
         }
 
-        const std::uint64_t differenceNs = AbsDiff(timestamp0, timestamp1);
-        maximumObservedDiffNs = std::max(maximumObservedDiffNs, differenceNs);
-        if (differenceNs > toleranceNs) {
-            validationFailure = "Host timestamp difference exceeded tolerance: diff=" +
-                                std::to_string(differenceNs) +
-                                " tolerance=" + std::to_string(toleranceNs);
-            std::cerr << validationFailure << "\n";
-            break;
+        latency.add(sample);
+        if (latencyCsv) {
+            WriteLatencyCsvRow(
+                latencyCsv, receivedSets, *set, *frame0, *frame1, sample);
         }
-
         ++receivedSets;
     }
 
-    PrintStats(camera0, camera1, sync, receivedSets);
+    if (latencyCsv) {
+        latencyCsv.flush();
+        if (!latencyCsv) {
+            validationFailure = "Failed while writing latency CSV";
+            std::cerr << validationFailure << "\n";
+        }
+    }
+
+    PrintStats(camera0, camera1, sync, receivedSets, completedWarmupSets);
     PrintStage("stopping acquisitions");
     const bool camera0Stopped = camera0.stopAcquisition();
     const bool camera1Stopped = camera1.stopAcquisition();
@@ -355,14 +595,23 @@ int main()
     const auto camera1Stats = camera1.stats();
     const auto syncStats = sync.stats();
 
+    if (!latency.hostPairDiffNs.empty()) {
+        latency.print();
+    }
+    if (!latencyCsvPath.empty()) {
+        std::cout << "[latency] csv=" << latencyCsvPath << std::endl;
+    }
+
     if (!validationFailure.empty()) return 1;
     if (!camera0Stopped || !camera1Stopped) {
         std::cerr << "One or more cameras failed AcquisitionStop command\n";
         return 1;
     }
     if (receivedSets < targetSets) {
-        std::cerr << "Timed out while waiting for synced sets: received="
-                  << receivedSets << " target=" << targetSets << "\n";
+        std::cerr << "Timed out while waiting for latency samples: measured="
+                  << receivedSets << " target=" << targetSets
+                  << " warmupCompleted=" << completedWarmupSets
+                  << " warmupTarget=" << latencyWarmupSets << "\n";
         return 1;
     }
     if (camera0Stats.readErrors != 0 || camera1Stats.readErrors != 0) {
@@ -374,6 +623,7 @@ int main()
     std::cout << "test_camera2plus_frame_sync_smoke passed"
               << " mode=" << (hardwareTrigger ? "hardware" : "free-run")
               << " sets=" << receivedSets
+              << " latencyWarmupSets=" << completedWarmupSets
               << " toleranceNs=" << toleranceNs
               << " maxObservedDiffNs=" << maximumObservedDiffNs
               << " syncInput=" << syncStats.inputFrames
