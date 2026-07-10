@@ -18,6 +18,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -61,6 +62,15 @@ IC4Ext::FrameSyncPolicy ParseSyncPolicy(const std::string& text)
     throw std::runtime_error("--sync-policy must be timestamp or frame-number");
 }
 
+IC4Ext::CameraPixelFormat ParseCameraFormat(const std::string& text)
+{
+    IC4Ext::CameraPixelFormat format{};
+    if (!IC4Ext::ParseCameraPixelFormat(text, format)) {
+        throw std::runtime_error("Unsupported --format value: " + text);
+    }
+    return format;
+}
+
 struct Options
 {
     std::vector<int> devices{0, 1};
@@ -71,6 +81,10 @@ struct Options
     int width = 0;
     int height = 0;
     double fps = 0.0;
+    IC4Ext::CameraPixelFormat cameraFormat = IC4Ext::CameraPixelFormat::BayerRG8;
+    int cameraStartDelayMs = 2000;
+    int cameraStartRetries = 3;
+    int cameraRetryDelayMs = 3000;
     int canvasWidth = 1600;
     int canvasHeight = 900;
     int maxSets = 0;
@@ -90,6 +104,10 @@ Options ParseOptions(int argc, char** argv)
     if (const char* v = ArgValue(argc, argv, "--width")) o.width = std::atoi(v);
     if (const char* v = ArgValue(argc, argv, "--height")) o.height = std::atoi(v);
     if (const char* v = ArgValue(argc, argv, "--fps")) o.fps = std::atof(v);
+    if (const char* v = ArgValue(argc, argv, "--format")) o.cameraFormat = ParseCameraFormat(v);
+    if (const char* v = ArgValue(argc, argv, "--camera-start-delay-ms")) o.cameraStartDelayMs = std::atoi(v);
+    if (const char* v = ArgValue(argc, argv, "--camera-start-retries")) o.cameraStartRetries = std::atoi(v);
+    if (const char* v = ArgValue(argc, argv, "--camera-retry-delay-ms")) o.cameraRetryDelayMs = std::atoi(v);
     if (const char* v = ArgValue(argc, argv, "--canvas-width")) o.canvasWidth = std::atoi(v);
     if (const char* v = ArgValue(argc, argv, "--canvas-height")) o.canvasHeight = std::atoi(v);
     if (const char* v = ArgValue(argc, argv, "--sets")) o.maxSets = std::atoi(v);
@@ -99,7 +117,43 @@ Options ParseOptions(int argc, char** argv)
 
     if (o.devices.size() < 2) throw std::runtime_error("--devices must contain at least two indices");
     if (o.canvasWidth <= 0 || o.canvasHeight <= 0) throw std::runtime_error("Canvas size must be positive");
+    if (o.cameraStartDelayMs < 0) throw std::runtime_error("--camera-start-delay-ms must be >= 0");
+    if (o.cameraStartRetries < 1) throw std::runtime_error("--camera-start-retries must be >= 1");
+    if (o.cameraRetryDelayMs < 0) throw std::runtime_error("--camera-retry-delay-ms must be >= 0");
     return o;
+}
+
+bool StartCameraWithRetry(IC4Ext::D3D12CameraCaptureThread& camera,
+                          std::size_t cameraSlot,
+                          int deviceIndex,
+                          int maxAttempts,
+                          int retryDelayMs)
+{
+    for (int attempt = 1; attempt <= maxAttempts; ++attempt) {
+        std::cout << "Starting camera slot=" << cameraSlot
+                  << " deviceIndex=" << deviceIndex
+                  << " attempt=" << attempt << "/" << maxAttempts << std::endl;
+
+        if (camera.start()) {
+            std::cout << "Started camera slot=" << cameraSlot
+                      << " deviceIndex=" << deviceIndex << std::endl;
+            return true;
+        }
+
+        const auto error = camera.lastError();
+        std::cerr << "Camera start failed slot=" << cameraSlot
+                  << " deviceIndex=" << deviceIndex
+                  << " attempt=" << attempt << "/" << maxAttempts
+                  << ": " << error.where << ": " << error.message << std::endl;
+
+        camera.stopAndJoin();
+        if (attempt < maxAttempts && retryDelayMs > 0) {
+            std::cout << "Retrying camera deviceIndex=" << deviceIndex
+                      << " after " << retryDelayMs << " ms" << std::endl;
+            std::this_thread::sleep_for(std::chrono::milliseconds(retryDelayMs));
+        }
+    }
+    return false;
 }
 
 struct MotionState
@@ -247,9 +301,15 @@ int main(int argc, char** argv)
         if (!syncThread.start()) throw std::runtime_error(syncThread.lastError().message);
 
         std::vector<std::unique_ptr<IC4Ext::D3D12CameraCaptureThread>> cameras;
+        cameras.reserve(options.devices.size());
         IC4Ext::CameraThreadOptions threadOptions;
         threadOptions.readTimeoutMs = 1000;
         threadOptions.copyPerOutputQueue = false;
+
+        std::cout << "Multi-camera startup: format=" << IC4Ext::ToString(options.cameraFormat)
+                  << " interCameraDelayMs=" << options.cameraStartDelayMs
+                  << " retries=" << options.cameraStartRetries
+                  << " retryDelayMs=" << options.cameraRetryDelayMs << std::endl;
 
         for (std::size_t i = 0; i < options.devices.size(); ++i) {
             IC4Ext::IC4DeviceSelector selector;
@@ -259,7 +319,7 @@ int main(int argc, char** argv)
             config.streamRequest.width = options.width;
             config.streamRequest.height = options.height;
             config.streamRequest.fps = options.fps;
-            config.streamRequest.requestedFormat = IC4Ext::CameraPixelFormat::BGR8;
+            config.streamRequest.requestedFormat = options.cameraFormat;
             config.streamRequest.forceRequestedFormat = true;
             config.outputSpec.outputFormat = IC4Ext::GpuFrameFormat::RGBA8;
             config.queuePolicy = IC4Ext::FrameQueuePolicy::PreserveFrames;
@@ -277,12 +337,26 @@ int main(int argc, char** argv)
             auto camera = std::make_unique<IC4Ext::D3D12CameraCaptureThread>(
                 selector, config, backend, threadOptions);
             camera->addOutputQueue(static_cast<std::uint32_t>(i), inputQueue);
-            if (!camera->start()) {
-                throw std::runtime_error("Camera start failed: " +
-                                         camera->lastError().where + ": " +
-                                         camera->lastError().message);
+
+            if (!StartCameraWithRetry(*camera,
+                                      i,
+                                      options.devices[i],
+                                      options.cameraStartRetries,
+                                      options.cameraRetryDelayMs)) {
+                const auto error = camera->lastError();
+                throw std::runtime_error("Camera start permanently failed slot=" +
+                                         std::to_string(i) +
+                                         " deviceIndex=" + std::to_string(options.devices[i]) +
+                                         ": " + error.where + ": " + error.message);
             }
+
             cameras.push_back(std::move(camera));
+
+            if (i + 1 < options.devices.size() && options.cameraStartDelayMs > 0) {
+                std::cout << "Waiting " << options.cameraStartDelayMs
+                          << " ms before opening the next camera" << std::endl;
+                std::this_thread::sleep_for(std::chrono::milliseconds(options.cameraStartDelayMs));
+            }
         }
 
         std::vector<IC4Ext::D3D12FrameReadback> readbacks(cameras.size());
@@ -329,7 +403,8 @@ int main(int argc, char** argv)
 
             auto set = outputQueue->waitPopFor(std::chrono::milliseconds(100));
             if (!set) {
-                running = cv::waitKey(1) != 27;
+                const int key = cv::waitKey(1);
+                running = key != 27 && key != 'q' && key != 'Q';
                 continue;
             }
 
