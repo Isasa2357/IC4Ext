@@ -11,6 +11,7 @@
 #endif
 
 #include <algorithm>
+#include <cctype>
 #include <exception>
 #include <iostream>
 #include <memory>
