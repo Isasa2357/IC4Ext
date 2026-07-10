@@ -20,31 +20,39 @@ IC4Ext::CameraCaptureConfig config;
 config.acquisitionStartMode = IC4Ext::AcquisitionStartMode::Immediate;
 ```
 
-複数カメラでは`Deferred`を使用します。
+現在のDFK 33UX252とIC4 1.6.0.894では、`DeferAcquisitionStart`経路で2台目が安定してフレームを出さない場合がありました。そのため、複数カメラの実運用では次のprepare-stop方式を使用します。
 
-```cpp
-IC4Ext::CameraCaptureConfig config;
-config.acquisitionStartMode = IC4Ext::AcquisitionStartMode::Deferred;
+```text
+camera 0: Immediateでopen
+camera 0: AcquisitionStop command
+camera 1: Immediateでopen
+camera 1: AcquisitionStop command
+...
+sync threadを開始
+全camera worker threadを開始
+全camera: AcquisitionStart command
 ```
 
-この場合、`open()`はIC4の次の経路を使用します。
+実装では型付きAPIを使用します。
 
 ```cpp
-streamSetup(sink, ic4::StreamSetupOption::DeferAcquisitionStart);
-```
+IC4Ext::CameraCaptureConfig config0;
+IC4Ext::CameraCaptureConfig config1;
+config0.acquisitionStartMode = IC4Ext::AcquisitionStartMode::Immediate;
+config1.acquisitionStartMode = IC4Ext::AcquisitionStartMode::Immediate;
 
-全カメラのstreamを準備してから、worker threadと同期threadを開始し、最後に取得を開始します。
-
-```cpp
 capture0.open(selector0, config0, backend);
+capture0.setIC4Property("AcquisitionStop", std::string("execute"));
+
 capture1.open(selector1, config1, backend);
+capture1.setIC4Property("AcquisitionStop", std::string("execute"));
 
 IC4Ext::D3D12CameraCaptureThread camera0(std::move(capture0), backend);
 IC4Ext::D3D12CameraCaptureThread camera1(std::move(capture1), backend);
 
+syncThread.start();
 camera0.start();
 camera1.start();
-syncThread.start();
 
 camera0.startAcquisition();
 camera1.startAcquisition();
@@ -60,6 +68,10 @@ camera1.stopAndJoin();
 syncThread.stopAndJoin();
 ```
 
+IC4Ext自身が所有するcaptureでは、workerのblocking readが`startAcquisition()`や`stopAcquisition()`を妨げないようにしています。外部から渡された`ID3D*Camera`実装だけは、互換性のため制御とreadを直列化します。
+
+`AcquisitionStartMode::Deferred`は実験的APIとして残していますが、この実機構成では推奨しません。
+
 状態確認には次を使用できます。
 
 ```cpp
@@ -74,6 +86,8 @@ capture.isAcquisitionActive();
 ```cpp
 IC4Ext::ConfigureNoSync(config);
 ```
+
+複数カメラの準備中にfree-run転送を止める場合は、一時的なsoftware-trigger gateを使用し、全worker準備後に`TriggerMode=Off`へ戻します。
 
 ### HW trigger
 
@@ -134,7 +148,21 @@ Timestamp source     : HostReceived
 Tolerance            : 4,000,000 ns
 ```
 
-この条件で8.5万組以上を生成し、両カメラのread errorは0でした。同期dropは起動時の位置合わせ後、ほぼ一定でした。
+最終integration test:
+
+```text
+Synchronized sets     : 1,000
+Maximum observed diff : 438,100 ns
+syncInput              : 2,004
+syncEmitted            : 1,001
+syncDropped            : 1
+camera0 read           : 1,002
+camera1 read           : 1,002
+camera0/1 timeouts     : 0 / 0
+camera0/1 errors       : 0 / 0
+```
+
+別の長時間試験では8.5万組以上を生成し、両カメラのread errorは0でした。
 
 ```text
 free-run + HostReceived : 10 msで確認
@@ -166,7 +194,7 @@ OffsetX               = 236
 OffsetY               = 0
 ```
 
-JSON適用後、offsetは明示値で上書きされます。
+JSON適用後、offsetは明示値で上書きされます。同一の`devices[0].state`を両カメラへ適用できます。
 
 ## 解析サンプル
 
@@ -199,28 +227,37 @@ MultiCameraAnalysisDisplayD3D12.exe --devices 0,1 --trigger-mode hardware --trig
 
 ## 2カメラintegration test
 
-`test_camera2plus_frame_sync_smoke`は、2台を`Deferred`でopenしてからworkerとacquisitionを開始します。
-
-free-run:
-
-```bat
-set "IC4EXT_TEST_SYNC_TOLERANCE_NS=10000000"
-set "IC4EXT_TEST_SYNC_SETS=100"
-ctest --test-dir out\build\default -C Debug -L camera2plus --output-on-failure
-```
+`test_camera2plus_frame_sync_smoke`は、検証済みprepare-stop方式で2台を準備し、同期setを取得開始直後から消費します。各GPU frameのready fenceも待機します。
 
 HW trigger:
 
 ```bat
+set "IC4EXT_TEST_IC4_JSON=%CD%\samples\MultiCameraAnalysisDisplayD3D12\config\gamma1.json"
+set "IC4EXT_TEST_IC4_JSON_DEVICE_INDEX=0"
+set "IC4EXT_TEST_FPS=160"
+set "IC4EXT_TEST_OFFSET_X=236"
+set "IC4EXT_TEST_OFFSET_Y=0"
 set "IC4EXT_TEST_HW_TRIGGER=1"
 set "IC4EXT_TEST_TRIGGER_SOURCE=Line1"
 set "IC4EXT_TEST_SYNC_TOLERANCE_NS=4000000"
 set "IC4EXT_TEST_SYNC_SETS=1000"
 set "IC4EXT_TEST_SYNC_TIMEOUT_SECONDS=60"
-ctest --test-dir out\build\default -C Debug -L camera2plus --output-on-failure
+set "IC4EXT_TEST_INTER_CAMERA_DELAY_MS=1000"
+set "IC4EXT_TEST_GPU_READY_TIMEOUT_MS=5000"
+ctest --test-dir out\build\default -C Debug -R "^test_camera2plus_frame_sync_smoke$" -V
 ```
 
-テストは各setのtexture、camera index、HostReceived差、read error、正常停止を検証します。
+テストは次を検証します。
+
+```text
+2台のGPU textureが存在する
+GPU ready fenceが完了する
+camera index 0/1が含まれる
+HostReceived差が許容値以内
+read errorが0
+AcquisitionStopが成功する
+workerとsync threadが正常終了する
+```
 
 ## 性能とUSB帯域
 
