@@ -2,7 +2,6 @@
 
 #include <D3D12Helper/D3D12Core/D3D12Barrier.hpp>
 
-#include <algorithm>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -42,6 +41,7 @@ void D3D12FrameReadback::setError(ErrorCode code, const std::string& where, cons
 bool D3D12FrameReadback::initialize(const D3D12BackendContext& backendIn)
 {
     lastError_ = NoError();
+    resetCache();
     backend_ = backendIn;
     if (!backend_.resolve() || !backend_.corePtr || !backend_.queue || !backend_.device) {
         setError(ErrorCode::InvalidArgument,
@@ -61,6 +61,13 @@ bool D3D12FrameReadback::initialize(const D3D12BackendContext& backendIn)
         return false;
     }
     return true;
+}
+
+void D3D12FrameReadback::resetCache() noexcept
+{
+    readbackBuffer_ = D3D12CoreLib::D3D12ReadbackBuffer{};
+    readbackBufferSizeBytes_ = 0;
+    cacheStats_ = {};
 }
 
 bool D3D12FrameReadback::validateFrame(const D3D12CameraFrame& frame, GpuFrameFormat& srcFormat, D3D12_RESOURCE_DESC& desc)
@@ -87,6 +94,23 @@ bool D3D12FrameReadback::validateFrame(const D3D12CameraFrame& frame, GpuFrameFo
         setError(ErrorCode::UnsupportedFormat, "D3D12FrameReadback::readback", "only DXGI_FORMAT_R8_UNORM and DXGI_FORMAT_R8G8B8A8_UNORM are supported");
         return false;
     }
+    return true;
+}
+
+bool D3D12FrameReadback::ensureReadbackBuffer(UINT64 totalBytes)
+{
+    if (readbackBuffer_.Get() && readbackBufferSizeBytes_ >= totalBytes) {
+        ++cacheStats_.cacheHits;
+        return true;
+    }
+
+    ++cacheStats_.cacheMisses;
+    readbackBuffer_ = D3D12CoreLib::D3D12ReadbackBuffer{};
+    readbackBufferSizeBytes_ = 0;
+    readbackBuffer_.Initialize(device_, totalBytes);
+    readbackBufferSizeBytes_ = totalBytes;
+    ++cacheStats_.resourceRebuilds;
+    cacheStats_.bytesAllocated = totalBytes;
     return true;
 }
 
@@ -117,8 +141,8 @@ bool D3D12FrameReadback::readback(const D3D12CameraFrame& frame,
     }
 
     try {
-        D3D12CoreLib::D3D12ReadbackBuffer readbackBuffer;
-        readbackBuffer.Initialize(device_, totalBytes);
+        ++cacheStats_.readbacks;
+        if (!ensureReadbackBuffer(totalBytes)) return false;
 
         commandContext_.Reset();
         ID3D12GraphicsCommandList* cmd = commandContext_.GetCommandList();
@@ -130,7 +154,7 @@ bool D3D12FrameReadback::readback(const D3D12CameraFrame& frame,
         }
 
         D3D12_TEXTURE_COPY_LOCATION dstLocation{};
-        dstLocation.pResource = readbackBuffer.Get();
+        dstLocation.pResource = readbackBuffer_.Get();
         dstLocation.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
         dstLocation.PlacedFootprint = footprint;
 
@@ -158,7 +182,7 @@ bool D3D12FrameReadback::readback(const D3D12CameraFrame& frame,
             return false;
         }
 
-        const void* mapped = readbackBuffer.Map();
+        const void* mapped = readbackBuffer_.Map();
         if (!mapped) {
             setError(ErrorCode::D3D12Error, "D3D12FrameReadback::Map", "mapped pointer is null");
             return false;
@@ -174,7 +198,7 @@ bool D3D12FrameReadback::readback(const D3D12CameraFrame& frame,
                                                         frame.timing,
                                                         out,
                                                         &lastError_);
-        readbackBuffer.Unmap();
+        readbackBuffer_.Unmap();
         if (ok) {
             out.chunkMetadata = frame.chunkMetadata;
         }
