@@ -24,15 +24,27 @@ public:
                   CpuFrame& out,
                   std::uint32_t waitTimeoutMs = 1000);
 
+    void resetCache() noexcept;
+    FrameReadbackCacheStats cacheStats() const noexcept { return cacheStats_; }
+
     const ErrorInfo& lastError() const noexcept { return lastError_; }
 
 private:
-    bool validateFrame(const D3D11CameraFrame& frame, GpuFrameFormat& srcFormat);
+    bool validateFrame(const D3D11CameraFrame& frame,
+                       GpuFrameFormat& srcFormat,
+                       D3D11_TEXTURE2D_DESC& desc);
+    bool ensureStagingTexture(const D3D11_TEXTURE2D_DESC& sourceDesc);
     void setError(ErrorCode code, const std::string& where, const std::string& message);
 
     D3D11CoreLib::D3D11Core* core_ = nullptr;
     Microsoft::WRL::ComPtr<ID3D11Device> device_;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
+
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> stagingTexture_;
+    D3D11_TEXTURE2D_DESC stagingDesc_{};
+    bool hasStagingDesc_ = false;
+    FrameReadbackCacheStats cacheStats_{};
+
     ErrorInfo lastError_;
 };
 
