@@ -112,6 +112,29 @@ ChunkMultiFrameSetFrameId
 
 chunk が無効、またはカメラが対象 chunk を持たない場合は、各 `has*` flag が false のままになります。
 
+### Stress / integration tests
+
+以下を追加済みです。
+
+```txt
+test_no_camera_pipeline_stress
+  - synthetic D3D11 pass-through stress
+  - synthetic D3D12 FrameNumberExact / TimestampNearest stress
+  - D3D12 FrameSyncThread restart stress
+
+test_camera1_long_run_stress
+  - real camera 1000 frame capture by default
+  - IC4EXT_TEST_STRESS_FRAMES=10000 で 10000 frame 確認
+  - IC4EXT_TEST_STRESS_FPS=160 で 160fps 相当の要求
+  - stop / restart repeated path
+  - performance snapshot output
+
+test_camera1_readback_integration
+  - real camera GPU frame -> CpuFrame readback
+  - D3D11 staging texture cache hit/miss check
+  - D3D12 readback buffer cache hit/miss check
+```
+
 ### Settings / control
 
 ```txt
@@ -129,10 +152,13 @@ test_core
 test_cpu_frame
 test_backend_config
 test_chunk_metadata
+test_no_camera_pipeline_stress
 test_d3d11_frame_readback
 test_d3d11_dummy_camera_capture
 test_d3d11_frame_sync_thread
 test_single_camera_smoke
+test_camera1_readback_integration
+test_camera1_long_run_stress
 test_d3d12_core
 test_d3d12_shader_reference
 test_d3d12_dummy_camera_capture
@@ -175,28 +201,18 @@ MJPG / NV12
 
 方針として、必要になったら追加します。最初に追加するなら `Mono16` / `Bayer*16` が安全です。packed format は bit unpack test を先に用意してから追加します。
 
-### 3. Long-run / high-fps stress test
+### 3. Deeper long-run validation
 
-基本 smoke/staged test は増やしましたが、長時間・高fps前提の stress test はまだです。
-
-確認したい内容:
+基本的な long-run / high-fps / readback integration test は追加済みですが、より重い検証は今後の確認事項です。
 
 ```txt
-1000 / 10000 frame capture
-160fps 相当の連続 capture
-DummyCameraCapture 複数出力
-FrameSyncThread と readback の併用
-stop / restart repeated
-queue overflow behavior
-setter during acquisition
-GPU memory growth
-fence wait stall
-performance snapshot stability
+複数出力 + readback の長時間併用
+FrameSyncThread + readback の2台長時間併用
+setter during acquisition の連続実行
+GPU memory growth の外部監視
+fence wait stall の詳細計測
+24時間級 soak test
 ```
-
-### 4. Real-camera readback integration test
-
-synthetic texture readback test はありますが、実カメラから取得した frame を readback する optional integration test はまだありません。
 
 ## Recommended next steps
 
@@ -204,9 +220,8 @@ synthetic texture readback test はありますが、実カメラから取得し
 
 ```txt
 1. D3D12-D3D11 interop
-2. Long-run / high-fps stress tests
-3. Real-camera readback integration test
-4. Pixel format expansion if needed
+2. Pixel format expansion if needed
+3. Deeper long-run validation / soak tests
 ```
 
-現在の実装では performance snapshot、chunk metadata、readback resource reuse まで入ったため、次に大きく残っている機能は D3D12-D3D11 interop です。
+現在の実装では performance snapshot、chunk metadata、readback resource reuse、基本 stress / real-camera readback integration test まで入ったため、次に大きく残っている機能は D3D12-D3D11 interop です。
