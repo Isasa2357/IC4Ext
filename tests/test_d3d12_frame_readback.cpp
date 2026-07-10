@@ -54,6 +54,10 @@ int main()
     gpuFrame.format.outputFormat = IC4Ext::GpuFrameFormat::RGBA8;
     gpuFrame.timing.frameNumber = 123;
     gpuFrame.timing.deviceTimestampNs = 456;
+    gpuFrame.chunkMetadata.hasExposureTime = true;
+    gpuFrame.chunkMetadata.exposureTimeUs = 2000.0;
+    gpuFrame.chunkMetadata.hasGain = true;
+    gpuFrame.chunkMetadata.gain = 12.0;
 
     IC4Ext::D3D12FrameReadback readback;
     assert(readback.initialize(backend));
@@ -64,10 +68,13 @@ int main()
     assert(cpu.height == height);
     assert(cpu.rowPitch == width * 3);
     assert(cpu.timing.frameNumber == 123);
+    assert(cpu.chunkMetadata.hasExposureTime && cpu.chunkMetadata.exposureTimeUs == 2000.0);
+    assert(cpu.chunkMetadata.hasGain && cpu.chunkMetadata.gain == 12.0);
     assert((cpu.data == std::vector<std::uint8_t>{30,20,10, 60,50,40, 90,80,70, 3,2,1}));
 
     assert(readback.readback(gpuFrame, IC4Ext::CpuFrameFormat::Gray8, cpu, 5000));
     assert(cpu.rowPitch == width);
+    assert(cpu.chunkMetadata.hasExposureTime && cpu.chunkMetadata.exposureTimeUs == 2000.0);
     assert(cpu.data[0] == static_cast<std::uint8_t>((77u * 10u + 150u * 20u + 29u * 30u + 128u) >> 8u));
 
     std::cout << "test_d3d12_frame_readback passed\n";
