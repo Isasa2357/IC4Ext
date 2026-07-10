@@ -70,7 +70,13 @@ public:
                      "Source is not opened");
             return false;
         }
-        const bool ok = source_->startAcquisition();
+
+        bool ok = false;
+        if (auto* capture = dynamic_cast<D3D12CameraCapture*>(source_.get())) {
+            ok = capture->startAcquisition();
+        } else {
+            ok = source_->setIC4Property("AcquisitionStart", std::string("execute"));
+        }
         lastError_ = ok ? NoError() : source_->lastError();
         return ok;
     }
@@ -84,7 +90,13 @@ public:
                      "Source is not opened");
             return false;
         }
-        const bool ok = source_->stopAcquisition();
+
+        bool ok = false;
+        if (auto* capture = dynamic_cast<D3D12CameraCapture*>(source_.get())) {
+            ok = capture->stopAcquisition();
+        } else {
+            ok = source_->setIC4Property("AcquisitionStop", std::string("execute"));
+        }
         lastError_ = ok ? NoError() : source_->lastError();
         return ok;
     }
@@ -92,13 +104,21 @@ public:
     bool isStreaming() const noexcept
     {
         std::lock_guard<std::mutex> sourceLock(sourceMutex_);
-        return source_ && source_->isStreaming();
+        if (!source_) return false;
+        if (const auto* capture = dynamic_cast<const D3D12CameraCapture*>(source_.get())) {
+            return capture->isStreaming();
+        }
+        return source_->isOpened();
     }
 
     bool isAcquisitionActive() const noexcept
     {
         std::lock_guard<std::mutex> sourceLock(sourceMutex_);
-        return source_ && source_->isAcquisitionActive();
+        if (!source_) return false;
+        if (const auto* capture = dynamic_cast<const D3D12CameraCapture*>(source_.get())) {
+            return capture->isAcquisitionActive();
+        }
+        return source_->isOpened();
     }
 
     bool setFrameRate(double fps);
