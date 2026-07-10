@@ -15,6 +15,8 @@
 
 namespace {
 
+constexpr const char* kBuildMarker = "camera2plus-command-lifecycle-v4";
+
 std::uint64_t HostTimestampNs(const IC4Ext::D3D12IndexedCameraFrame& frame)
 {
     const auto value = std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -62,6 +64,7 @@ int main()
 {
     IC4ExtTest::CameraAccessCooldown cooldown;
 
+    std::cerr << "[camera2plus] build=" << kBuildMarker << std::endl;
     PrintStage("enumerating cameras");
     if (!IC4ExtTest::RequireCameraCount(2)) return 77;
 
@@ -86,15 +89,23 @@ int main()
     const std::string triggerSource = triggerSourceEnvironment
                                           ? triggerSourceEnvironment
                                           : "Line1";
-    const std::uint64_t toleranceNs = static_cast<std::uint64_t>(
-        IC4ExtTest::EnvInt("IC4EXT_TEST_SYNC_TOLERANCE_NS",
-                           hardwareTrigger ? 4'000'000 : 10'000'000));
+    const std::uint64_t toleranceNs = IC4ExtTest::EnvUInt64(
+        "IC4EXT_TEST_SYNC_TOLERANCE_NS",
+        hardwareTrigger ? 4'000'000ull : 10'000'000ull);
     const int targetSets =
         std::max(1, IC4ExtTest::EnvInt("IC4EXT_TEST_SYNC_SETS", 100));
     const int timeoutSeconds =
         std::max(5, IC4ExtTest::EnvInt("IC4EXT_TEST_SYNC_TIMEOUT_SECONDS", 30));
     const int interCameraDelayMs =
         std::max(0, IC4ExtTest::EnvInt("IC4EXT_TEST_INTER_CAMERA_DELAY_MS", 1000));
+
+    std::cerr << "[camera2plus] mode=" << (hardwareTrigger ? "hardware" : "free-run")
+              << " triggerSource=" << triggerSource
+              << " toleranceNs=" << toleranceNs
+              << " targetSets=" << targetSets
+              << " timeoutSeconds=" << timeoutSeconds
+              << " interCameraDelayMs=" << interCameraDelayMs
+              << std::endl;
 
     auto config0 = IC4ExtTest::MakeCameraConfig("d3d12", 0);
     auto config1 = IC4ExtTest::MakeCameraConfig("d3d12", 1);
@@ -231,6 +242,10 @@ int main()
         sync.stopAndJoin();
         return 1;
     }
+
+    PrintStage("camera acquisitions started; waiting for initial frames");
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    PrintStats(camera0, camera1, sync, 0);
 
     int receivedSets = 0;
     std::uint64_t maximumObservedDiffNs = 0;
