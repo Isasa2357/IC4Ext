@@ -15,7 +15,7 @@
 
 namespace {
 
-constexpr const char* kBuildMarker = "camera2plus-command-lifecycle-v4";
+constexpr const char* kBuildMarker = "camera2plus-command-lifecycle-v5";
 
 std::uint64_t HostTimestampNs(const IC4Ext::D3D12IndexedCameraFrame& frame)
 {
@@ -98,6 +98,8 @@ int main()
         std::max(5, IC4ExtTest::EnvInt("IC4EXT_TEST_SYNC_TIMEOUT_SECONDS", 30));
     const int interCameraDelayMs =
         std::max(0, IC4ExtTest::EnvInt("IC4EXT_TEST_INTER_CAMERA_DELAY_MS", 1000));
+    const unsigned readyTimeoutMs = static_cast<unsigned>(
+        std::max(1000, IC4ExtTest::EnvInt("IC4EXT_TEST_GPU_READY_TIMEOUT_MS", 5000)));
 
     std::cerr << "[camera2plus] mode=" << (hardwareTrigger ? "hardware" : "free-run")
               << " triggerSource=" << triggerSource
@@ -105,6 +107,7 @@ int main()
               << " targetSets=" << targetSets
               << " timeoutSeconds=" << timeoutSeconds
               << " interCameraDelayMs=" << interCameraDelayMs
+              << " readyTimeoutMs=" << readyTimeoutMs
               << std::endl;
 
     auto config0 = IC4ExtTest::MakeCameraConfig("d3d12", 0);
@@ -243,10 +246,6 @@ int main()
         return 1;
     }
 
-    PrintStage("camera acquisitions started; waiting for initial frames");
-    std::this_thread::sleep_for(std::chrono::seconds(1));
-    PrintStats(camera0, camera1, sync, 0);
-
     int receivedSets = 0;
     std::uint64_t maximumObservedDiffNs = 0;
     std::string validationFailure;
@@ -254,7 +253,7 @@ int main()
         std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSeconds);
     auto nextStatsPrint = std::chrono::steady_clock::now() + std::chrono::seconds(1);
 
-    PrintStage("collecting synchronized sets");
+    PrintStage("collecting synchronized sets immediately");
     while (receivedSets < targetSets && std::chrono::steady_clock::now() < deadline) {
         auto set = outputQueue->waitPopFor(std::chrono::milliseconds(200));
 
@@ -266,30 +265,79 @@ int main()
 
         if (!set) continue;
 
-        if (set->frames.size() != 2 ||
-            set->frames[0].cameraIndex != 0 ||
-            set->frames[1].cameraIndex != 1) {
-            validationFailure = "Unexpected synced frame set layout";
-            break;
-        }
-        if (!set->frames[0].frame.texture || !set->frames[1].frame.texture) {
-            validationFailure = "Synced set contains an empty GPU texture";
+        if (set->frames.size() != 2) {
+            validationFailure = "Unexpected synced frame count: " +
+                                std::to_string(set->frames.size());
+            std::cerr << validationFailure << "\n";
             break;
         }
 
-        const std::uint64_t timestamp0 = HostTimestampNs(set->frames[0]);
-        const std::uint64_t timestamp1 = HostTimestampNs(set->frames[1]);
+        const IC4Ext::D3D12IndexedCameraFrame* frame0 = nullptr;
+        const IC4Ext::D3D12IndexedCameraFrame* frame1 = nullptr;
+        for (const auto& indexed : set->frames) {
+            if (indexed.cameraIndex == 0) {
+                if (frame0) {
+                    validationFailure = "Synced set contains duplicate camera index 0";
+                    break;
+                }
+                frame0 = &indexed;
+            } else if (indexed.cameraIndex == 1) {
+                if (frame1) {
+                    validationFailure = "Synced set contains duplicate camera index 1";
+                    break;
+                }
+                frame1 = &indexed;
+            } else {
+                validationFailure = "Synced set contains unexpected camera index " +
+                                    std::to_string(indexed.cameraIndex);
+                break;
+            }
+        }
+        if (!validationFailure.empty()) {
+            std::cerr << validationFailure << "\n";
+            break;
+        }
+        if (!frame0 || !frame1) {
+            validationFailure = "Synced set does not contain both camera 0 and camera 1";
+            std::cerr << validationFailure << "\n";
+            break;
+        }
+
+        if (!frame0->frame.texture || !frame1->frame.texture) {
+            validationFailure = "Synced set contains an empty GPU texture";
+            std::cerr << validationFailure << "\n";
+            break;
+        }
+        if (!frame0->frame.ready.isValid() || !frame1->frame.ready.isValid()) {
+            validationFailure = "Synced set contains an invalid GPU ready token";
+            std::cerr << validationFailure << "\n";
+            break;
+        }
+        if (!frame0->frame.ready.wait(readyTimeoutMs) ||
+            !frame1->frame.ready.wait(readyTimeoutMs)) {
+            validationFailure = "Timed out waiting for synchronized GPU frames";
+            std::cerr << validationFailure << "\n";
+            break;
+        }
+
+        const std::uint64_t timestamp0 = HostTimestampNs(*frame0);
+        const std::uint64_t timestamp1 = HostTimestampNs(*frame1);
         if (timestamp0 == 0 || timestamp1 == 0) {
             validationFailure = "Synced set has no host receive timestamp";
+            std::cerr << validationFailure << "\n";
             break;
         }
 
         const std::uint64_t differenceNs = AbsDiff(timestamp0, timestamp1);
         maximumObservedDiffNs = std::max(maximumObservedDiffNs, differenceNs);
         if (differenceNs > toleranceNs) {
-            validationFailure = "Host timestamp difference exceeded tolerance";
+            validationFailure = "Host timestamp difference exceeded tolerance: diff=" +
+                                std::to_string(differenceNs) +
+                                " tolerance=" + std::to_string(toleranceNs);
+            std::cerr << validationFailure << "\n";
             break;
         }
+
         ++receivedSets;
     }
 
@@ -307,10 +355,7 @@ int main()
     const auto camera1Stats = camera1.stats();
     const auto syncStats = sync.stats();
 
-    if (!validationFailure.empty()) {
-        std::cerr << validationFailure << "\n";
-        return 1;
-    }
+    if (!validationFailure.empty()) return 1;
     if (!camera0Stopped || !camera1Stopped) {
         std::cerr << "One or more cameras failed AcquisitionStop command\n";
         return 1;
