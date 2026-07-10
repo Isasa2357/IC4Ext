@@ -23,6 +23,7 @@ endfunction()
 ic4ext_add_no_camera_test(test_core test_core.cpp)
 ic4ext_add_no_camera_test(test_cpu_frame test_cpu_frame.cpp)
 ic4ext_add_no_camera_test(test_backend_config test_backend_config.cpp)
+ic4ext_add_no_camera_test(test_chunk_metadata test_chunk_metadata.cpp)
 
 if(IC4EXT_ENABLE_D3D11)
     ic4ext_add_no_camera_test(test_d3d11_frame_readback test_d3d11_frame_readback.cpp)
