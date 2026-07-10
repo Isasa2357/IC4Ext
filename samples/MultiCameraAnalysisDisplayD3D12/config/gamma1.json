@@ -70,6 +70,8 @@
           }
         },
         "OffsetAutoCenter": "Off",
+        "OffsetX": 236,
+        "OffsetY": 0,
         "PixelFormat": "BayerRG8",
         "ReverseX": false,
         "ReverseY": false,
