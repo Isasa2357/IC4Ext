@@ -2,6 +2,10 @@ option(IC4EXT_MULTICAMERA_SAMPLE_ENABLE_RECORDING
     "Enable H.264 recording in MultiCameraSyncDisplayD3D12"
     ON)
 
+option(IC4EXT_BUILD_OPENCV_ANALYSIS_SAMPLE
+    "Build the OpenCV synchronized multi-camera analysis/display/recording sample"
+    OFF)
+
 if(IC4EXT_MULTICAMERA_SAMPLE_ENABLE_RECORDING AND NOT TARGET D3DVideoEncoder::D3DVideoEncoder)
     include(FetchContent)
     set(D3DVIDEOENCODER_BUILD_SAMPLE OFF CACHE BOOL "" FORCE)
@@ -49,4 +53,10 @@ if(WIN32 AND IC4_SDK_ROOT)
                 "$<TARGET_FILE_DIR:MultiCameraSyncDisplayD3D12>/shaders/D3D12Processing"
             VERBATIM)
     endif()
+endif()
+
+if(IC4EXT_BUILD_OPENCV_ANALYSIS_SAMPLE)
+    add_subdirectory(
+        "${CMAKE_CURRENT_LIST_DIR}/../MultiCameraAnalysisDisplayD3D12"
+        "${CMAKE_CURRENT_BINARY_DIR}/MultiCameraAnalysisDisplayD3D12")
 endif()
