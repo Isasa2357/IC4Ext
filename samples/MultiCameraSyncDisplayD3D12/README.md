@@ -1,83 +1,107 @@
 # MultiCameraSyncDisplayD3D12
 
-複数の IC4 カメラを D3D12 backend で取得し、`D3D12FrameSyncThread` が出力した同期 frame set を1枚の canvasへ並べて表示するサンプルです。
+複数のIC4カメラをD3D12 backendで取得し、`D3D12FrameSyncThread`が出力した同期frame setを1枚のcanvasへ並べて表示するサンプルです。
 
 - 2台は左右並び
-- 3台以上は台数に応じた正方形に近い grid
-- 各映像はアスペクト比を維持して letterbox 配置
-- `--record` 指定時は、画面表示と同じ合成 canvas を H.264 MP4へ記録
+- 3台以上は正方形に近いgrid
+- アスペクト比を維持してletterbox配置
+- `--record`指定時は表示と同じcanvasをH.264 MP4へ記録
 - `none` / `hardware` / `software` trigger mode
 - `timestamp` / `frame-number` sync policy
 
+## Deferred acquisition
+
+全カメラを次の設定で先にopenします。
+
+```cpp
+config.acquisitionStartMode = IC4Ext::AcquisitionStartMode::Deferred;
+```
+
+処理順:
+
+```text
+全camera: streamSetup(DeferAcquisitionStart)
+D3D12FrameSyncThreadを開始
+全camera worker threadを開始
+全camera: startAcquisition()
+```
+
+終了時:
+
+```text
+全camera: stopAcquisition()
+全camera worker: stopAndJoin()
+sync thread: stopAndJoin()
+```
+
+これにより、1台目のframe転送中に2台目の`PayloadSize`を問い合わせる経路を避けます。
+
 ## 実行例
 
-同期なし、2台表示:
+free-run、2台表示:
 
 ```bat
-MultiCameraSyncDisplayD3D12.exe --devices 0,1 --trigger-mode none --sync-policy timestamp
+MultiCameraSyncDisplayD3D12.exe --devices 0,1 --trigger-mode none --sync-policy timestamp --max-timestamp-diff-ns 10000000 --format BayerRG8
 ```
 
-外部 hardware trigger:
+外部HW trigger:
 
 ```bat
-MultiCameraSyncDisplayD3D12.exe --devices 0,1 --trigger-mode hardware --trigger-source Line1 --sync-policy frame-number
+MultiCameraSyncDisplayD3D12.exe --devices 0,1 --trigger-mode hardware --trigger-source Line1 --sync-policy timestamp --max-timestamp-diff-ns 4000000 --format BayerRG8 --fps 160
 ```
 
-software trigger:
+SW triggerは実験的です。
 
 ```bat
-MultiCameraSyncDisplayD3D12.exe --devices 0,1 --trigger-mode software --sync-policy timestamp
+MultiCameraSyncDisplayD3D12.exe --devices 0,1 --trigger-mode software --sync-policy timestamp --max-timestamp-diff-ns 10000000
 ```
 
-表示と同じ横並び映像を録画:
+表示と同じ映像を録画:
 
 ```bat
-MultiCameraSyncDisplayD3D12.exe --devices 0,1 --trigger-mode hardware --trigger-source Line1 --sync-policy frame-number --fps 60 --record synchronized.mp4
-```
-
-3台を 1920x1080 canvasへ配置:
-
-```bat
-MultiCameraSyncDisplayD3D12.exe --devices 0,1,2 --canvas-width 1920 --canvas-height 1080
+MultiCameraSyncDisplayD3D12.exe --devices 0,1 --trigger-mode hardware --trigger-source Line1 --sync-policy timestamp --max-timestamp-diff-ns 4000000 --fps 160 --record synchronized.mp4
 ```
 
 ## 引数
 
 ```text
---devices 0,1[,2,...]             使用する IC4 device index
+--devices 0,1[,2,...]
 --trigger-mode none|hardware|software
---trigger-source Line1             hardware trigger input line
+--trigger-source Line1
 --sync-policy timestamp|frame-number
---max-timestamp-diff-ns 1000000    TimestampNearest の許容差
---width 1920
---height 1080
---fps 60
---format BGR8                      IC4 input pixel format
+--max-timestamp-diff-ns 10000000
+--width 1536
+--height 1536
+--fps 160
+--format BayerRG8
+--camera-setup-delay-ms 1000
+--camera-open-retries 3
+--camera-retry-delay-ms 3000
 --canvas-width 1600
 --canvas-height 900
---sets 0                           0 は windowを閉じるまで継続
---record output.mp4                指定した場合のみ録画
+--sets 0
+--record output.mp4
 --record-bitrate 16000000
 ```
 
-## 録画 backend
+独立カメラではframe numberの起点が異なる場合があります。`frame-number`はcounter基準が一致することを保証できる場合だけ使用してください。通常は`timestamp + HostReceived`を使用します。
 
-`IC4EXT_MULTICAMERA_SAMPLE_ENABLE_RECORDING=ON` の場合、CMake が `D3DVideoEncoder` を取得し、native D3D12 Video Encode backend を有効にします。
+## 録画backend
 
 ```bat
 -DIC4EXT_MULTICAMERA_SAMPLE_ENABLE_RECORDING:BOOL=ON
 ```
 
-録画が不要なら dependency と build時間を減らせます。
+録画が不要な場合:
 
 ```bat
 -DIC4EXT_MULTICAMERA_SAMPLE_ENABLE_RECORDING:BOOL=OFF
 ```
 
-native D3D12 Video Encode は GPU / driver の対応状況に依存します。録画開始時に backend 初期化エラーになる場合は、表示だけで実機同期を確認するか、D3DVideoEncoder の capability sample で H.264 / NV12 support を確認してください。
+native D3D12 Video EncodeはGPUとdriverの対応状況に依存します。
 
 ## 実装上の注意
 
-同期 frame は GPU texture から `RGBA8` CPU frameへ readbackし、CPU上で同じ canvasへ合成しています。表示は Win32/GDI、録画時は合成 canvas を D3D12 RGBA8 textureへ uploadして D3DVideoEncoderへ渡します。
+同期frameはGPU textureから`RGBA8` CPU frameへreadbackし、CPU上でcanvasへ合成します。表示はWin32/GDI、録画時は合成canvasをD3D12 RGBA8 textureへuploadしてD3DVideoEncoderへ渡します。
 
-この経路は「表示内容と録画内容を完全に一致させる」ことを優先しています。高解像度・高fpsでCPU負荷が問題になる場合は、次段階として D3D12Processing によるGPU grid compositeへ置き換えます。
+この経路は表示内容と録画内容の一致を優先しています。高解像度・高fpsでCPU負荷が問題になる場合は、D3D12ProcessingによるGPU grid compositeへ置き換えます。
