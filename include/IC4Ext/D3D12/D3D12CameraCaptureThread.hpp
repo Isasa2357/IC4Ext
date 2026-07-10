@@ -61,6 +61,91 @@ public:
     bool setIC4Property(const std::string& propertyName, const char* value);
     bool setIC4Property(const std::string& propertyName, const std::string& value);
 
+    // Typed public lifecycle API. IC4Ext-owned captures are internally synchronized,
+    // so acquisition commands must not wait behind the worker's blocking read. External
+    // camera implementations remain serialized through sourceMutex_ for compatibility.
+    bool startAcquisition()
+    {
+        const auto invoke = [this](const std::shared_ptr<ID3D12Camera>& source) {
+            if (!source || !source->isOpened()) {
+                setError(ErrorCode::NotOpened,
+                         "D3D12CameraCaptureThread::startAcquisition",
+                         "Source is not opened");
+                return false;
+            }
+
+            const bool ok = source->setIC4Property(
+                "AcquisitionStart",
+                std::string("execute"));
+            lastError_ = ok ? NoError() : source->lastError();
+            return ok;
+        };
+
+        if (sourceMode_ == SourceMode::ExternalSource) {
+            std::lock_guard<std::mutex> sourceLock(sourceMutex_);
+            return invoke(source_);
+        }
+        return invoke(source_);
+    }
+
+    bool stopAcquisition()
+    {
+        const auto invoke = [this](const std::shared_ptr<ID3D12Camera>& source) {
+            if (!source || !source->isOpened()) {
+                setError(ErrorCode::NotOpened,
+                         "D3D12CameraCaptureThread::stopAcquisition",
+                         "Source is not opened");
+                return false;
+            }
+
+            const bool ok = source->setIC4Property(
+                "AcquisitionStop",
+                std::string("execute"));
+            lastError_ = ok ? NoError() : source->lastError();
+            return ok;
+        };
+
+        if (sourceMode_ == SourceMode::ExternalSource) {
+            std::lock_guard<std::mutex> sourceLock(sourceMutex_);
+            return invoke(source_);
+        }
+        return invoke(source_);
+    }
+
+    bool isStreaming() const noexcept
+    {
+        const auto query = [](const std::shared_ptr<ID3D12Camera>& source) noexcept {
+            if (!source) return false;
+            if (const auto* capture = dynamic_cast<const D3D12CameraCapture*>(source.get())) {
+                return capture->isStreaming();
+            }
+            return source->isOpened();
+        };
+
+        if (sourceMode_ == SourceMode::ExternalSource) {
+            std::lock_guard<std::mutex> sourceLock(sourceMutex_);
+            return query(source_);
+        }
+        return query(source_);
+    }
+
+    bool isAcquisitionActive() const noexcept
+    {
+        const auto query = [](const std::shared_ptr<ID3D12Camera>& source) noexcept {
+            if (!source) return false;
+            if (const auto* capture = dynamic_cast<const D3D12CameraCapture*>(source.get())) {
+                return capture->isAcquisitionActive();
+            }
+            return source->isOpened();
+        };
+
+        if (sourceMode_ == SourceMode::ExternalSource) {
+            std::lock_guard<std::mutex> sourceLock(sourceMutex_);
+            return query(source_);
+        }
+        return query(source_);
+    }
+
     bool setFrameRate(double fps);
     bool setExposureAuto(const std::string& mode);
     bool setExposureTime(double exposureTimeUs);
@@ -70,6 +155,27 @@ public:
     bool setOffset(int offsetX, int offsetY);
     bool setRoi(int width, int height, int offsetX, int offsetY);
     bool setPixelFormat(CameraPixelFormat fmt);
+    bool softwareTrigger(const std::string& commandName = "TriggerSoftware")
+    {
+        const auto invoke = [this, &commandName](const std::shared_ptr<ID3D12Camera>& source) {
+            if (!source || !source->isOpened()) {
+                setError(ErrorCode::NotOpened,
+                         "D3D12CameraCaptureThread::softwareTrigger",
+                         "Source is not opened");
+                return false;
+            }
+            const bool ok = source->softwareTrigger(
+                commandName.empty() ? std::string("TriggerSoftware") : commandName);
+            lastError_ = ok ? NoError() : source->lastError();
+            return ok;
+        };
+
+        if (sourceMode_ == SourceMode::ExternalSource) {
+            std::lock_guard<std::mutex> sourceLock(sourceMutex_);
+            return invoke(source_);
+        }
+        return invoke(source_);
+    }
 
     CameraThreadStats stats() const;
     const ErrorInfo& lastError() const noexcept { return lastError_; }

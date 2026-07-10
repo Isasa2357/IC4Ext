@@ -39,6 +39,13 @@ public:
     void close() noexcept;
     bool isOpened() const noexcept override { return opened_.load(); }
 
+    // Typed lifecycle API intentionally lives on the concrete capture class so the
+    // existing ID3D11Camera vtable remains ABI-compatible.
+    bool startAcquisition();
+    bool stopAcquisition();
+    bool isStreaming() const noexcept;
+    bool isAcquisitionActive() const noexcept;
+
     ReadResult read(ReadMode mode = ReadMode::LatestFrame) override;
     ReadResult read(const CameraReadOptions& options) override;
 
@@ -63,6 +70,11 @@ public:
     bool setOffset(int offsetX, int offsetY) override;
     bool setRoi(int width, int height, int offsetX, int offsetY) override;
     bool setPixelFormat(CameraPixelFormat fmt) override;
+    bool softwareTrigger(const std::string& commandName = "TriggerSoftware") override
+    {
+        return setIC4Property(commandName.empty() ? std::string("TriggerSoftware") : commandName,
+                              std::string("execute"));
+    }
 
     CameraCaptureStats stats() const;
     CameraPerformanceSnapshot performance();

@@ -11,6 +11,7 @@
 #endif
 
 #include <algorithm>
+#include <cassert>
 #include <cctype>
 #include <exception>
 #include <iostream>
@@ -19,18 +20,23 @@
 
 namespace {
 
+void Stage(const char* backend, const char* stage)
+{
+    std::cerr << "[readback][" << backend << "] " << stage << std::endl;
+}
+
 std::string Lower(std::string text)
 {
-    std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
     return text;
 }
 
 bool ShouldRunBackend(const char* backendName)
 {
     const char* requestedEnv = IC4ExtTest::Env("IC4EXT_TEST_READBACK_BACKEND");
-    if (!requestedEnv || std::string(requestedEnv).empty()) {
-        return true;
-    }
+    if (!requestedEnv || std::string(requestedEnv).empty()) return true;
     const std::string requested = Lower(requestedEnv);
     return requested == "both" || requested == "all" || requested == Lower(backendName);
 }
@@ -48,7 +54,9 @@ void ValidateCpuFrame(const IC4Ext::CpuFrame& cpu)
     assert(cpu.data.size() == static_cast<std::size_t>(cpu.rowPitch) * cpu.height);
 }
 
-void ValidateCacheStats(const char* tag, const IC4Ext::FrameReadbackCacheStats& stats, int frameCount)
+void ValidateCacheStats(const char* tag,
+                        const IC4Ext::FrameReadbackCacheStats& stats,
+                        int frameCount)
 {
     std::cout << tag << " readback cache: readbacks=" << stats.readbacks
               << " hits=" << stats.cacheHits
@@ -81,23 +89,24 @@ void PrintPerformance(const char* tag, const IC4Ext::CameraPerformanceSnapshot& 
 #if IC4EXT_ENABLE_D3D11
 int RunD3D11Readback(int frameCount, int readTimeoutMs)
 {
-    if (!ShouldRunBackend("d3d11")) {
-        return 77;
-    }
+    if (!ShouldRunBackend("d3d11")) return 77;
 
+    Stage("D3D11", "creating core");
     std::shared_ptr<D3D11CoreLib::D3D11Core> core;
     try {
         core = D3D11CoreLib::D3D11Core::CreateShared();
     } catch (const std::exception& e) {
-        std::cerr << "D3D11Core creation failed; skipping D3D11 readback integration: " << e.what() << "\n";
+        std::cerr << "D3D11Core creation failed; skipping D3D11 readback integration: "
+                  << e.what() << "\n";
         return 77;
     }
 
     IC4Ext::IC4DeviceSelector selector;
     selector.deviceIndex = 0;
-
     IC4Ext::CameraCaptureConfig config = IC4ExtTest::MakeCameraConfig("d3d11", 0);
+
     IC4Ext::D3D11CameraCapture capture;
+    Stage("D3D11", "opening capture");
     if (!capture.open(selector, config, core.get())) {
         std::cerr << "D3D11 readback integration open failed; skipping: "
                   << capture.lastError().where << ": " << capture.lastError().message << "\n";
@@ -105,9 +114,11 @@ int RunD3D11Readback(int frameCount, int readTimeoutMs)
     }
 
     IC4Ext::D3D11FrameReadback readback;
+    Stage("D3D11", "initializing readback");
     if (!readback.initialize(core.get())) {
         std::cerr << "D3D11 readback initialize failed: " << readback.lastError().where
                   << ": " << readback.lastError().message << "\n";
+        capture.stopAcquisition();
         capture.close();
         return 1;
     }
@@ -117,26 +128,45 @@ int RunD3D11Readback(int frameCount, int readTimeoutMs)
     readOptions.timeoutMs = static_cast<unsigned>(readTimeoutMs);
 
     for (int i = 0; i < frameCount; ++i) {
+        Stage("D3D11", "reading and copying frame");
         auto result = capture.read(readOptions);
         if (!result) {
             std::cerr << "D3D11 readback integration read failed at frame " << i
                       << ": " << result.error.where << ": " << result.error.message << "\n";
+            capture.stopAcquisition();
             capture.close();
             return 1;
         }
+
         IC4Ext::CpuFrame cpu;
-        if (!readback.readback(result.frame, IC4Ext::CpuFrameFormat::BGR8, cpu, static_cast<unsigned>(readTimeoutMs))) {
+        if (!readback.readback(result.frame,
+                               IC4Ext::CpuFrameFormat::BGR8,
+                               cpu,
+                               static_cast<unsigned>(readTimeoutMs))) {
             std::cerr << "D3D11 readback failed at frame " << i << ": "
                       << readback.lastError().where << ": " << readback.lastError().message << "\n";
+            result = {};
+            capture.stopAcquisition();
             capture.close();
             return 1;
         }
         ValidateCpuFrame(cpu);
+        result = {};
     }
 
     ValidateCacheStats("D3D11", readback.cacheStats(), frameCount);
+    Stage("D3D11", "sampling performance");
     PrintPerformance("D3D11 readback integration", capture.performance());
+    Stage("D3D11", "stopping acquisition");
+    if (!capture.stopAcquisition()) {
+        std::cerr << "D3D11 stopAcquisition failed: " << capture.lastError().where << ": "
+                  << capture.lastError().message << "\n";
+        capture.close();
+        return 1;
+    }
+    Stage("D3D11", "closing capture");
     capture.close();
+    Stage("D3D11", "closed");
     IC4ExtTest::SleepAfterCameraAccess();
     return 0;
 }
@@ -145,15 +175,15 @@ int RunD3D11Readback(int frameCount, int readTimeoutMs)
 #if IC4EXT_ENABLE_D3D12
 int RunD3D12Readback(int frameCount, int readTimeoutMs)
 {
-    if (!ShouldRunBackend("d3d12")) {
-        return 77;
-    }
+    if (!ShouldRunBackend("d3d12")) return 77;
 
+    Stage("D3D12", "creating core");
     std::shared_ptr<D3D12CoreLib::D3D12Core> core;
     try {
         core = D3D12CoreLib::D3D12Core::CreateShared();
     } catch (const std::exception& e) {
-        std::cerr << "D3D12Core creation failed; skipping D3D12 readback integration: " << e.what() << "\n";
+        std::cerr << "D3D12Core creation failed; skipping D3D12 readback integration: "
+                  << e.what() << "\n";
         return 77;
     }
 
@@ -165,9 +195,10 @@ int RunD3D12Readback(int frameCount, int readTimeoutMs)
 
     IC4Ext::IC4DeviceSelector selector;
     selector.deviceIndex = 0;
-
     IC4Ext::CameraCaptureConfig config = IC4ExtTest::MakeCameraConfig("d3d12", 0);
+
     IC4Ext::D3D12CameraCapture capture;
+    Stage("D3D12", "opening capture");
     if (!capture.open(selector, config, backend)) {
         std::cerr << "D3D12 readback integration open failed; skipping: "
                   << capture.lastError().where << ": " << capture.lastError().message << "\n";
@@ -175,9 +206,11 @@ int RunD3D12Readback(int frameCount, int readTimeoutMs)
     }
 
     IC4Ext::D3D12FrameReadback readback;
+    Stage("D3D12", "initializing readback");
     if (!readback.initialize(backend)) {
         std::cerr << "D3D12 readback initialize failed: " << readback.lastError().where
                   << ": " << readback.lastError().message << "\n";
+        capture.stopAcquisition();
         capture.close();
         return 1;
     }
@@ -187,26 +220,47 @@ int RunD3D12Readback(int frameCount, int readTimeoutMs)
     readOptions.timeoutMs = static_cast<unsigned>(readTimeoutMs);
 
     for (int i = 0; i < frameCount; ++i) {
+        Stage("D3D12", "reading and copying frame");
         auto result = capture.read(readOptions);
         if (!result) {
             std::cerr << "D3D12 readback integration read failed at frame " << i
                       << ": " << result.error.where << ": " << result.error.message << "\n";
+            capture.stopAcquisition();
             capture.close();
             return 1;
         }
+
         IC4Ext::CpuFrame cpu;
-        if (!readback.readback(result.frame, IC4Ext::CpuFrameFormat::BGR8, cpu, static_cast<unsigned>(readTimeoutMs))) {
+        if (!readback.readback(result.frame,
+                               IC4Ext::CpuFrameFormat::BGR8,
+                               cpu,
+                               static_cast<unsigned>(readTimeoutMs))) {
             std::cerr << "D3D12 readback failed at frame " << i << ": "
                       << readback.lastError().where << ": " << readback.lastError().message << "\n";
+            result = {};
+            capture.stopAcquisition();
             capture.close();
             return 1;
         }
         ValidateCpuFrame(cpu);
+        result = {};
     }
 
     ValidateCacheStats("D3D12", readback.cacheStats(), frameCount);
+    Stage("D3D12", "sampling performance");
     PrintPerformance("D3D12 readback integration", capture.performance());
+    Stage("D3D12", "stopping acquisition");
+    if (!capture.stopAcquisition()) {
+        std::cerr << "D3D12 stopAcquisition failed: " << capture.lastError().where << ": "
+                  << capture.lastError().message << "\n";
+        capture.close();
+        return 1;
+    }
+    Stage("D3D12", "closing capture");
     capture.close();
+    Stage("D3D12", "waiting GPU idle");
+    core->WaitIdle();
+    Stage("D3D12", "closed");
     IC4ExtTest::SleepAfterCameraAccess();
     return 0;
 }
@@ -218,9 +272,8 @@ int main()
 {
     IC4ExtTest::CameraAccessCooldown cooldown;
 
-    if (!IC4ExtTest::RequireCameraCount(1)) {
-        return 77;
-    }
+    Stage("test", "enumerating cameras");
+    if (!IC4ExtTest::RequireCameraCount(1)) return 77;
 
     const int frameCount = IC4ExtTest::EnvInt("IC4EXT_TEST_READBACK_FRAMES", 5);
     const int readTimeoutMs = IC4ExtTest::EnvInt("IC4EXT_TEST_READBACK_TIMEOUT_MS", 5000);

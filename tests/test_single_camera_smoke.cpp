@@ -17,6 +17,11 @@
 
 namespace {
 
+void Stage(const char* backend, const char* stage)
+{
+    std::cerr << "[single-camera][" << backend << "] " << stage << std::endl;
+}
+
 void PrintPerformanceSummary(const char* backend, const IC4Ext::CameraPerformanceSnapshot& perf)
 {
     std::cout << backend << " performance: received=" << perf.captureStats.receivedBuffers
@@ -42,6 +47,7 @@ void PrintPerformanceSummary(const char* backend, const IC4Ext::CameraPerformanc
 #if IC4EXT_ENABLE_D3D11
 int RunD3D11Path()
 {
+    Stage("D3D11", "creating core");
     std::shared_ptr<D3D11CoreLib::D3D11Core> core;
     try {
         core = D3D11CoreLib::D3D11Core::CreateShared();
@@ -52,41 +58,74 @@ int RunD3D11Path()
 
     IC4Ext::IC4DeviceSelector selector;
     selector.deviceIndex = 0;
-
     IC4Ext::CameraCaptureConfig config = IC4ExtTest::MakeCameraConfig("d3d11", 0);
 
     IC4Ext::D3D11CameraCapture capture;
+    Stage("D3D11", "opening capture");
     if (!capture.open(selector, config, core.get())) {
         std::cerr << "D3D11 camera path skipped/open failed: " << capture.lastError().where
                   << ": " << capture.lastError().message << "\n";
         return 77;
     }
 
+    Stage("D3D11", "reading latest frame");
     auto latest = capture.read(IC4Ext::ReadMode::LatestFrame);
     if (!latest) {
-        std::cerr << "D3D11 LatestFrame read failed: " << latest.error.where << ": " << latest.error.message << "\n";
+        std::cerr << "D3D11 LatestFrame read failed: " << latest.error.where << ": "
+                  << latest.error.message << "\n";
+        capture.stopAcquisition();
+        capture.close();
         return 1;
     }
+
+    Stage("D3D11", "waiting latest fence");
     if (!latest.frame.texture || !latest.frame.ready.wait(3000)) {
         std::cerr << "D3D11 LatestFrame texture/fence invalid\n";
+        latest = {};
+        capture.stopAcquisition();
+        capture.close();
         return 1;
     }
 
+    Stage("D3D11", "reading next frame");
     auto next = capture.read(IC4ExtTest::ReadOptions(3000));
     if (!next) {
-        std::cerr << "D3D11 NextFrame read failed: " << next.error.where << ": " << next.error.message << "\n";
-        return 1;
-    }
-    if (!next.frame.texture || !next.frame.ready.wait(3000)) {
-        std::cerr << "D3D11 NextFrame texture/fence invalid\n";
+        std::cerr << "D3D11 NextFrame read failed: " << next.error.where << ": "
+                  << next.error.message << "\n";
+        latest = {};
+        capture.stopAcquisition();
+        capture.close();
         return 1;
     }
 
+    Stage("D3D11", "waiting next fence");
+    if (!next.frame.texture || !next.frame.ready.wait(3000)) {
+        std::cerr << "D3D11 NextFrame texture/fence invalid\n";
+        latest = {};
+        next = {};
+        capture.stopAcquisition();
+        capture.close();
+        return 1;
+    }
+
+    Stage("D3D11", "sampling performance");
     const auto perf = capture.performance();
     assert(perf.captureStats.receivedBuffers >= 1);
     PrintPerformanceSummary("D3D11", perf);
 
+    Stage("D3D11", "releasing returned frames");
+    latest = {};
+    next = {};
+    Stage("D3D11", "stopping acquisition");
+    if (!capture.stopAcquisition()) {
+        std::cerr << "D3D11 stopAcquisition failed: " << capture.lastError().where << ": "
+                  << capture.lastError().message << "\n";
+        capture.close();
+        return 1;
+    }
+    Stage("D3D11", "closing capture");
     capture.close();
+    Stage("D3D11", "closed");
     IC4ExtTest::SleepAfterCameraAccess();
     std::cout << "D3D11 single camera path passed\n";
     return 0;
@@ -96,6 +135,7 @@ int RunD3D11Path()
 #if IC4EXT_ENABLE_D3D12
 int RunD3D12Path()
 {
+    Stage("D3D12", "creating core");
     std::shared_ptr<D3D12CoreLib::D3D12Core> core;
     try {
         core = D3D12CoreLib::D3D12Core::CreateShared();
@@ -112,41 +152,75 @@ int RunD3D12Path()
 
     IC4Ext::IC4DeviceSelector selector;
     selector.deviceIndex = 0;
-
     IC4Ext::CameraCaptureConfig config = IC4ExtTest::MakeCameraConfig("d3d12", 0);
 
     IC4Ext::D3D12CameraCapture capture;
+    Stage("D3D12", "opening capture");
     if (!capture.open(selector, config, backend)) {
         std::cerr << "D3D12 camera path skipped/open failed: " << capture.lastError().where
                   << ": " << capture.lastError().message << "\n";
         return 77;
     }
 
+    Stage("D3D12", "reading latest frame");
     auto latest = capture.read(IC4Ext::ReadMode::LatestFrame);
     if (!latest) {
-        std::cerr << "D3D12 LatestFrame read failed: " << latest.error.where << ": " << latest.error.message << "\n";
+        std::cerr << "D3D12 LatestFrame read failed: " << latest.error.where << ": "
+                  << latest.error.message << "\n";
+        capture.stopAcquisition();
+        capture.close();
         return 1;
     }
+
+    Stage("D3D12", "waiting latest fence");
     if (!latest.frame.texture || !latest.frame.ready.wait(3000)) {
         std::cerr << "D3D12 LatestFrame texture/fence invalid\n";
+        latest = {};
+        capture.stopAcquisition();
+        capture.close();
         return 1;
     }
 
+    Stage("D3D12", "reading next frame");
     auto next = capture.read(IC4ExtTest::ReadOptions(3000));
     if (!next) {
-        std::cerr << "D3D12 NextFrame read failed: " << next.error.where << ": " << next.error.message << "\n";
-        return 1;
-    }
-    if (!next.frame.texture || !next.frame.ready.wait(3000)) {
-        std::cerr << "D3D12 NextFrame texture/fence invalid\n";
+        std::cerr << "D3D12 NextFrame read failed: " << next.error.where << ": "
+                  << next.error.message << "\n";
+        latest = {};
+        capture.stopAcquisition();
+        capture.close();
         return 1;
     }
 
+    Stage("D3D12", "waiting next fence");
+    if (!next.frame.texture || !next.frame.ready.wait(3000)) {
+        std::cerr << "D3D12 NextFrame texture/fence invalid\n";
+        latest = {};
+        next = {};
+        capture.stopAcquisition();
+        capture.close();
+        return 1;
+    }
+
+    Stage("D3D12", "sampling performance");
     const auto perf = capture.performance();
     assert(perf.captureStats.receivedBuffers >= 1);
     PrintPerformanceSummary("D3D12", perf);
 
+    Stage("D3D12", "releasing returned frames");
+    latest = {};
+    next = {};
+    Stage("D3D12", "stopping acquisition");
+    if (!capture.stopAcquisition()) {
+        std::cerr << "D3D12 stopAcquisition failed: " << capture.lastError().where << ": "
+                  << capture.lastError().message << "\n";
+        capture.close();
+        return 1;
+    }
+    Stage("D3D12", "closing capture");
     capture.close();
+    Stage("D3D12", "closed");
+    core->WaitIdle();
     IC4ExtTest::SleepAfterCameraAccess();
     std::cout << "D3D12 single camera path passed\n";
     return 0;
@@ -159,9 +233,8 @@ int main()
 {
     IC4ExtTest::CameraAccessCooldown cooldown;
 
-    if (!IC4ExtTest::RequireCameraCount(1)) {
-        return 77;
-    }
+    Stage("test", "enumerating cameras");
+    if (!IC4ExtTest::RequireCameraCount(1)) return 77;
 
     bool ranAnyPath = false;
 

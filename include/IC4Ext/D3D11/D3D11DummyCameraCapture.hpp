@@ -50,6 +50,11 @@ public:
     bool setOffset(int offsetX, int offsetY) override;
     bool setRoi(int width, int height, int offsetX, int offsetY) override;
     bool setPixelFormat(CameraPixelFormat fmt) override;
+    bool softwareTrigger(const std::string& commandName = "TriggerSoftware") override
+    {
+        return setIC4Property(commandName.empty() ? std::string("TriggerSoftware") : commandName,
+                              std::string("execute"));
+    }
 
     const ErrorInfo& lastError() const noexcept override { return lastError_; }
 

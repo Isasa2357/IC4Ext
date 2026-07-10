@@ -1,5 +1,12 @@
 cmake_minimum_required(VERSION 3.21)
-project(IC4Ext VERSION 0.1.0 LANGUAGES CXX)
+
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" IC4EXT_VERSION)
+string(STRIP "${IC4EXT_VERSION}" IC4EXT_VERSION)
+if(NOT IC4EXT_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+    message(FATAL_ERROR "Invalid IC4Ext VERSION value: '${IC4EXT_VERSION}'")
+endif()
+
+project(IC4Ext VERSION "${IC4EXT_VERSION}" LANGUAGES CXX)
 
 include(FetchContent)
 
@@ -17,6 +24,7 @@ if(NOT IC4EXT_ENABLE_D3D11 AND NOT IC4EXT_ENABLE_D3D12)
     message(FATAL_ERROR "At least one backend must be enabled: IC4EXT_ENABLE_D3D11 or IC4EXT_ENABLE_D3D12")
 endif()
 
+message(STATUS "IC4Ext version: ${PROJECT_VERSION}")
 message(STATUS "IC4Ext backend selection: D3D11=${IC4EXT_ENABLE_D3D11}, D3D12=${IC4EXT_ENABLE_D3D12}")
 
 # Dependency acquisition policy.
@@ -44,7 +52,6 @@ set(IC4EXT_D3D12HELPER_GIT_TAG "v1.12.1" CACHE STRING "Git tag/branch/commit for
 set(IC4EXT_THREADKIT_GIT_TAG "main" CACHE STRING "Git tag/branch/commit for ThreadKit FetchContent")
 set(IC4EXT_NLOHMANN_JSON_GIT_TAG "v3.11.3" CACHE STRING "Git tag/branch/commit for nlohmann/json FetchContent")
 
-
 # -----------------------------------------------------------------------------
 # DirectX Shader Compiler runtime discovery
 # -----------------------------------------------------------------------------
@@ -53,7 +60,7 @@ set(IC4EXT_NLOHMANN_JSON_GIT_TAG "v3.11.3" CACHE STRING "Git tag/branch/commit f
 # When users run:
 #   nuget install Microsoft.Direct3D.DXC -OutputDirectory packages
 # from the IC4Ext root, the package is under IC4Ext/packages and would otherwise
-# be missed.  Resolve it once at the top-level and pass it down to both helpers.
+# be missed. Resolve it once at the top-level and pass it down to both helpers.
 set(IC4EXT_DXC_RUNTIME_DIR "" CACHE PATH "Directory that contains dxcompiler.dll and dxil.dll. Overrides auto-detection.")
 
 function(ic4ext_find_dxc_runtime_dir out_var)
@@ -109,9 +116,9 @@ endif()
 # -----------------------------------------------------------------------------
 # nlohmann/json
 # -----------------------------------------------------------------------------
-# Do not FetchContent the full nlohmann/json repository on Windows.  The repo
+# Do not FetchContent the full nlohmann/json repository on Windows. The repo
 # contains very long test/report file names that can exceed MAX_PATH when this
-# project is placed under a nested Downloads path.  IC4Ext only needs the single
+# project is placed under a nested Downloads path. IC4Ext only needs the single
 # public header, so fetch that file directly and expose the normal
 # nlohmann_json::nlohmann_json interface target.
 set(IC4EXT_NLOHMANN_JSON_SINGLE_HEADER_URL

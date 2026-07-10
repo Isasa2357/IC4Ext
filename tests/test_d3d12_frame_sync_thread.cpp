@@ -24,12 +24,17 @@ std::shared_ptr<IC4Ext::D3D12SyncedFrameQueue> MakeOutputQueue()
 
 IC4Ext::D3D12IndexedCameraFrame MakeFrame(std::uint32_t cameraIndex,
                                           std::uint64_t frameNumber,
-                                          std::uint64_t timestampNs)
+                                          std::uint64_t timestampNs,
+                                          std::uint64_t hostTimestampNs = 0)
 {
     IC4Ext::D3D12IndexedCameraFrame frame;
     frame.cameraIndex = cameraIndex;
     frame.frame.timing.frameNumber = frameNumber;
     frame.frame.timing.deviceTimestampNs = timestampNs;
+    if (hostTimestampNs != 0) {
+        frame.frame.timing.hostReceivedTime = std::chrono::steady_clock::time_point(
+            std::chrono::nanoseconds(hostTimestampNs));
+    }
     frame.frame.format.width = 2;
     frame.frame.format.height = 2;
     return frame;
@@ -104,13 +109,14 @@ void TestFrameNumberExact()
     assert(stats.droppedFrames >= 1);
 }
 
-void TestTimestampNearest()
+void TestTimestampNearestDeviceClock()
 {
     auto input = MakeInputQueue();
     auto output = MakeOutputQueue();
 
     IC4Ext::FrameSyncOptions options;
     options.policy = IC4Ext::FrameSyncPolicy::TimestampNearest;
+    options.timestampSource = IC4Ext::FrameSyncTimestampSource::Device;
     options.cameraIndices = {0, 1};
     options.maxTimestampDiffNs = 100;
     options.maxBufferedFramesPerCamera = 4;
@@ -134,6 +140,38 @@ void TestTimestampNearest()
     const auto stats = sync.stats();
     assert(stats.emittedSets >= 1);
     assert(stats.droppedFrames >= 1);
+}
+
+void TestTimestampNearestHostClockWithIndependentDeviceEpochs()
+{
+    auto input = MakeInputQueue();
+    auto output = MakeOutputQueue();
+
+    IC4Ext::FrameSyncOptions options;
+    options.policy = IC4Ext::FrameSyncPolicy::TimestampNearest;
+    options.timestampSource = IC4Ext::FrameSyncTimestampSource::Auto;
+    options.cameraIndices = {0, 1};
+    options.maxTimestampDiffNs = 100;
+    options.maxBufferedFramesPerCamera = 4;
+
+    IC4Ext::D3D12FrameSyncThread sync(input, output, options);
+    assert(sync.start());
+
+    // Device timestamp epochs are unrelated, while both frames arrived on the same
+    // process-wide steady clock within the configured 100 ns tolerance.
+    input->push(MakeFrame(0, 1, 1'000, 50'000));
+    input->push(MakeFrame(1, 1, 90'000'000'000, 50'050));
+
+    auto set = output->waitPopFor(std::chrono::milliseconds(1000));
+    assert(set.has_value());
+    assert(set->frames.size() == 2);
+    assert(set->frames[0].frame.timing.frameNumber == 1);
+    assert(set->frames[1].frame.timing.frameNumber == 1);
+
+    sync.stopAndJoin();
+    const auto stats = sync.stats();
+    assert(stats.emittedSets >= 1);
+    assert(stats.droppedFrames == 0);
 }
 
 void TestInvalidOptions()
@@ -162,7 +200,8 @@ int main()
 {
     TestPassThrough();
     TestFrameNumberExact();
-    TestTimestampNearest();
+    TestTimestampNearestDeviceClock();
+    TestTimestampNearestHostClockWithIndependentDeviceEpochs();
     TestInvalidOptions();
 
     std::cout << "test_d3d12_frame_sync_thread passed\n";
