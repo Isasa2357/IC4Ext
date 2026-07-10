@@ -72,10 +72,30 @@ int main()
     assert(cpu.chunkMetadata.hasGain && cpu.chunkMetadata.gain == 12.0);
     assert((cpu.data == std::vector<std::uint8_t>{30,20,10, 60,50,40, 90,80,70, 3,2,1}));
 
+    auto stats = readback.cacheStats();
+    assert(stats.readbacks == 1);
+    assert(stats.cacheMisses == 1);
+    assert(stats.cacheHits == 0);
+    assert(stats.resourceRebuilds == 1);
+    assert(stats.bytesAllocated >= width * height * 4);
+
     assert(readback.readback(gpuFrame, IC4Ext::CpuFrameFormat::Gray8, cpu, 5000));
     assert(cpu.rowPitch == width);
     assert(cpu.chunkMetadata.hasExposureTime && cpu.chunkMetadata.exposureTimeUs == 2000.0);
     assert(cpu.data[0] == static_cast<std::uint8_t>((77u * 10u + 150u * 20u + 29u * 30u + 128u) >> 8u));
+
+    stats = readback.cacheStats();
+    assert(stats.readbacks == 2);
+    assert(stats.cacheMisses == 1);
+    assert(stats.cacheHits == 1);
+    assert(stats.resourceRebuilds == 1);
+
+    readback.resetCache();
+    stats = readback.cacheStats();
+    assert(stats.readbacks == 0);
+    assert(stats.cacheHits == 0);
+    assert(stats.cacheMisses == 0);
+    assert(stats.resourceRebuilds == 0);
 
     std::cout << "test_d3d12_frame_readback passed\n";
     return 0;
