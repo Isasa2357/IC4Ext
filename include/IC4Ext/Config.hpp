@@ -56,11 +56,13 @@ enum class CameraSyncMode : std::uint32_t
 enum class AcquisitionStartMode : std::uint32_t
 {
     // streamSetup starts acquisition immediately. This preserves the original
-    // single-camera behavior and remains the default.
+    // single-camera behavior and remains the default and validated mode.
     Immediate = 0,
 
-    // streamSetup prepares the stream but does not start acquisition. Call
-    // startAcquisition() after every camera and worker thread is ready.
+    // Experimental: streamSetup uses IC4 DeferAcquisitionStart. The current
+    // DFK 33UX252 / IC4 1.6.0.894 USB3Vision combination did not reliably start
+    // the second camera through this path. Multi-camera production samples use
+    // Immediate followed by the typed stopAcquisition()/startAcquisition() API.
     Deferred = 1,
 };
 
