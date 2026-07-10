@@ -46,6 +46,8 @@ public:
     virtual bool setRoi(int width, int height, int offsetX, int offsetY) = 0;
     virtual bool setPixelFormat(CameraPixelFormat fmt) = 0;
 
+    virtual bool softwareTrigger(const std::string& commandName = "TriggerSoftware") = 0;
+
     virtual const ErrorInfo& lastError() const noexcept = 0;
 };
 
