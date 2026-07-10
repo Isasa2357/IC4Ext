@@ -174,7 +174,9 @@ enum class FrameSyncPolicy : std::uint32_t
 struct FrameSyncOptions
 {
     FrameSyncPolicy policy = FrameSyncPolicy::PassThroughSingleCamera;
-    std::vector<std::uint32_t> cameraIndices = {0};
+    // Empty means camera 0 for PassThroughSingleCamera. Multi-camera users should
+    // explicitly provide all logical camera indices.
+    std::vector<std::uint32_t> cameraIndices;
     std::uint64_t maxTimestampDiffNs = 1'000'000;
     std::size_t maxBufferedFramesPerCamera = 8;
 };
