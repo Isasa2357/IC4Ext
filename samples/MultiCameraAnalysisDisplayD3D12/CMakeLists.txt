@@ -1,6 +1,6 @@
 find_package(OpenCV REQUIRED COMPONENTS core imgproc highgui videoio)
 
-add_executable(MultiCameraAnalysisDisplayD3D12 main.cpp)
+add_executable(MultiCameraAnalysisDisplayD3D12 main_compat.cpp)
 target_link_libraries(MultiCameraAnalysisDisplayD3D12
     PRIVATE
         IC4Ext::IC4Ext
