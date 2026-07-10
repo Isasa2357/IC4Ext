@@ -171,6 +171,21 @@ enum class FrameSyncPolicy : std::uint32_t
     FrameNumberExact = 2,
 };
 
+enum class FrameSyncTimestampSource : std::uint32_t
+{
+    // Prefer hostReceivedTime because it is recorded in one process-wide steady-clock
+    // domain. Fall back to the camera-provided timestamp when host time is unavailable.
+    Auto = 0,
+
+    // Compare hostReceivedTime. This is appropriate for independent free-running USB
+    // cameras whose device timestamp counters do not share an epoch.
+    HostReceived = 1,
+
+    // Compare the camera-provided deviceTimestampNs directly. Use this only when camera
+    // clocks are known to be synchronized or otherwise share a comparable clock domain.
+    Device = 2,
+};
+
 struct FrameSyncOptions
 {
     FrameSyncPolicy policy = FrameSyncPolicy::PassThroughSingleCamera;
@@ -179,6 +194,7 @@ struct FrameSyncOptions
     std::vector<std::uint32_t> cameraIndices;
     std::uint64_t maxTimestampDiffNs = 1'000'000;
     std::size_t maxBufferedFramesPerCamera = 8;
+    FrameSyncTimestampSource timestampSource = FrameSyncTimestampSource::Auto;
 };
 
 const char* ToString(CameraPixelFormat fmt) noexcept;
