@@ -70,6 +70,7 @@ public:
     bool setOffset(int offsetX, int offsetY);
     bool setRoi(int width, int height, int offsetX, int offsetY);
     bool setPixelFormat(CameraPixelFormat fmt);
+    bool softwareTrigger(const std::string& commandName = "TriggerSoftware");
 
     CameraThreadStats stats() const;
     const ErrorInfo& lastError() const noexcept { return lastError_; }
