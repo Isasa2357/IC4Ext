@@ -3,6 +3,7 @@
 #include <D3D11Helper/D3D11Gpu/D3D11Resource.hpp>
 #include <D3D11Helper/D3D11Gpu/D3D11TextureTransfer.hpp>
 
+#include <exception>
 #include <sstream>
 #include <string>
 
