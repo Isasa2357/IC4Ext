@@ -3,6 +3,7 @@
 #include <IC4Ext/IC4Ext.hpp>
 #include <ic4/ic4.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
