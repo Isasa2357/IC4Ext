@@ -53,6 +53,17 @@ enum class CameraSyncMode : std::uint32_t
     SoftwareTrigger = 2,
 };
 
+enum class AcquisitionStartMode : std::uint32_t
+{
+    // streamSetup starts acquisition immediately. This preserves the original
+    // single-camera behavior and remains the default.
+    Immediate = 0,
+
+    // streamSetup prepares the stream but does not start acquisition. Call
+    // startAcquisition() after every camera and worker thread is ready.
+    Deferred = 1,
+};
+
 struct IC4StateJsonConfig
 {
     // IC Capture 4 state JSON exported by the official application.
@@ -144,6 +155,8 @@ struct CameraCaptureConfig
     FrameQueuePolicy queuePolicy = FrameQueuePolicy::LatestOnly;
     std::size_t maxPendingBuffers = 1;
     ShaderLoadConfig shaderConfig;
+
+    AcquisitionStartMode acquisitionStartMode = AcquisitionStartMode::Immediate;
 
     // Applied after JSON state and stream/ROI settings. This is mainly used by
     // D3D11CameraCaptureThread setters called before open(). It is also the path
