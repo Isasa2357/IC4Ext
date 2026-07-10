@@ -53,10 +53,12 @@ public:
     void close() noexcept;
     bool isOpened() const noexcept override { return opened_.load(); }
 
-    bool startAcquisition() override;
-    bool stopAcquisition() override;
-    bool isStreaming() const noexcept override;
-    bool isAcquisitionActive() const noexcept override;
+    // Typed lifecycle API intentionally lives on the concrete capture class so the
+    // existing ID3D12Camera vtable remains ABI-compatible.
+    bool startAcquisition();
+    bool stopAcquisition();
+    bool isStreaming() const noexcept;
+    bool isAcquisitionActive() const noexcept;
 
     D3D12ReadResult read(ReadMode mode = ReadMode::LatestFrame) override;
     D3D12ReadResult read(const CameraReadOptions& options) override;
