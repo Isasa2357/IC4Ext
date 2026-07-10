@@ -69,7 +69,19 @@ public:
     bool setOffset(int offsetX, int offsetY);
     bool setRoi(int width, int height, int offsetX, int offsetY);
     bool setPixelFormat(CameraPixelFormat fmt);
-    bool softwareTrigger(const std::string& commandName = "TriggerSoftware");
+    bool softwareTrigger(const std::string& commandName = "TriggerSoftware")
+    {
+        std::lock_guard<std::mutex> sourceLock(sourceMutex_);
+        if (!source_ || !source_->isOpened()) {
+            setError(ErrorCode::NotOpened,
+                     "D3D11CameraCaptureThread::softwareTrigger",
+                     "Source is not opened");
+            return false;
+        }
+        const bool ok = source_->softwareTrigger(commandName.empty() ? std::string("TriggerSoftware") : commandName);
+        lastError_ = ok ? NoError() : source_->lastError();
+        return ok;
+    }
 
     CameraThreadStats stats() const;
     const ErrorInfo& lastError() const noexcept { return lastError_; }
