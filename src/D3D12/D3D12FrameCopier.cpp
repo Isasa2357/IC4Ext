@@ -1,26 +1,12 @@
 #include "IC4Ext/D3D12/D3D12FrameCopier.hpp"
 
+#include <D3D12Helper/D3D12Core/D3D12Barrier.hpp>
 #include <D3D12Helper/D3D12Framework/D3D12Helpers.hpp>
 
 #include <exception>
 #include <sstream>
 
 namespace IC4Ext {
-
-namespace {
-D3D12_RESOURCE_BARRIER TransitionBarrier(ID3D12Resource* resource,
-                                         D3D12_RESOURCE_STATES before,
-                                         D3D12_RESOURCE_STATES after)
-{
-    D3D12_RESOURCE_BARRIER barrier = {};
-    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier.Transition.pResource = resource;
-    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    barrier.Transition.StateBefore = before;
-    barrier.Transition.StateAfter = after;
-    return barrier;
-}
-}
 
 void D3D12FrameCopier::setError(ErrorCode code, const char* where, const std::string& message)
 {
@@ -125,15 +111,15 @@ bool D3D12FrameCopier::copyFrameNoSignal(const D3D12CameraFrame& src, D3D12Camer
 
         auto* cmd = slot->commandContext.GetCommandList();
         if (src.resourceState != D3D12_RESOURCE_STATE_COPY_SOURCE) {
-            auto toSrc = TransitionBarrier(src.texture.Get(), src.resourceState, D3D12_RESOURCE_STATE_COPY_SOURCE);
+            auto toSrc = D3D12CoreLib::MakeTransitionBarrier(src.texture.Get(), src.resourceState, D3D12_RESOURCE_STATE_COPY_SOURCE);
             slot->commandContext.ResourceBarrier(toSrc);
         }
         cmd->CopyResource(dst.texture.Get(), src.texture.Get());
         if (src.resourceState != D3D12_RESOURCE_STATE_COPY_SOURCE) {
-            auto back = TransitionBarrier(src.texture.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, src.resourceState);
+            auto back = D3D12CoreLib::MakeTransitionBarrier(src.texture.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, src.resourceState);
             slot->commandContext.ResourceBarrier(back);
         }
-        auto dstFinal = TransitionBarrier(dst.texture.Get(), D3D12_RESOURCE_STATE_COPY_DEST, src.resourceState);
+        auto dstFinal = D3D12CoreLib::MakeTransitionBarrier(dst.texture.Get(), D3D12_RESOURCE_STATE_COPY_DEST, src.resourceState);
         slot->commandContext.ResourceBarrier(dstFinal);
 
         dst.textureResource.SetState(src.resourceState);
