@@ -39,6 +39,11 @@ public:
     void close() noexcept;
     bool isOpened() const noexcept override { return opened_.load(); }
 
+    bool startAcquisition() override;
+    bool stopAcquisition() override;
+    bool isStreaming() const noexcept override;
+    bool isAcquisitionActive() const noexcept override;
+
     ReadResult read(ReadMode mode = ReadMode::LatestFrame) override;
     ReadResult read(const CameraReadOptions& options) override;
 
