@@ -42,15 +42,11 @@ public:
     ReadResult read(ReadMode mode = ReadMode::LatestFrame) override;
     ReadResult read(const CameraReadOptions& options) override;
 
-    // Applies an IC Capture 4 state JSON exported by the official application.
-    // It reads devices[deviceIndex].state and uses nlohmann/json internally.
     bool applyIC4StateJson(const std::filesystem::path& jsonPath,
                            std::size_t deviceIndex = 0,
                            bool strict = false,
                            bool applyNestedSelectorStates = true) override;
 
-    // Generic IC4 property setters. These are useful for properties loaded from JSON
-    // and for camera-specific properties not exposed by convenience methods.
     bool setIC4Property(const std::string& propertyName, bool value) override;
     bool setIC4Property(const std::string& propertyName, int value) override;
     bool setIC4Property(const std::string& propertyName, std::int64_t value) override;
@@ -69,6 +65,7 @@ public:
     bool setPixelFormat(CameraPixelFormat fmt) override;
 
     CameraCaptureStats stats() const;
+    CameraPerformanceSnapshot performance();
     const ErrorInfo& lastError() const noexcept override { return lastError_; }
 
 private:
