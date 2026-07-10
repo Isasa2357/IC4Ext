@@ -56,13 +56,6 @@ TriggerMode ParseTriggerMode(const std::string& text)
     throw std::runtime_error("--trigger-mode must be none, hardware, or software");
 }
 
-IC4Ext::FrameSyncPolicy ParseSyncPolicy(const std::string& text)
-{
-    if (text == "timestamp") return IC4Ext::FrameSyncPolicy::TimestampNearest;
-    if (text == "frame-number") return IC4Ext::FrameSyncPolicy::FrameNumberExact;
-    throw std::runtime_error("--sync-policy must be timestamp or frame-number");
-}
-
 IC4Ext::CameraPixelFormat ParseCameraFormat(const std::string& text)
 {
     IC4Ext::CameraPixelFormat format{};
@@ -76,9 +69,8 @@ struct Options
 {
     std::vector<int> devices{0, 1};
     TriggerMode triggerMode = TriggerMode::None;
-    IC4Ext::FrameSyncPolicy syncPolicy = IC4Ext::FrameSyncPolicy::TimestampNearest;
     std::string triggerSource = "Line1";
-    std::uint64_t maxTimestampDiffNs = 1'000'000;
+    std::uint64_t maxTimestampDiffNs = 100'000'000;
     int width = 0;
     int height = 0;
     double fps = 0.0;
@@ -99,9 +91,18 @@ Options ParseOptions(int argc, char** argv)
     Options o;
     if (const char* v = ArgValue(argc, argv, "--devices")) o.devices = ParseDevices(v);
     if (const char* v = ArgValue(argc, argv, "--trigger-mode")) o.triggerMode = ParseTriggerMode(v);
-    if (const char* v = ArgValue(argc, argv, "--sync-policy")) o.syncPolicy = ParseSyncPolicy(v);
+    if (const char* v = ArgValue(argc, argv, "--sync-policy")) {
+        if (std::string(v) != "timestamp") {
+            throw std::runtime_error(
+                "MultiCameraAnalysisDisplayD3D12 uses host timer synchronization. "
+                "--sync-policy frame-number is not supported because independent cameras can start with different frame-number offsets. "
+                "Use --sync-policy timestamp or omit the option.");
+        }
+    }
     if (const char* v = ArgValue(argc, argv, "--trigger-source")) o.triggerSource = v;
-    if (const char* v = ArgValue(argc, argv, "--max-timestamp-diff-ns")) o.maxTimestampDiffNs = std::strtoull(v, nullptr, 10);
+    if (const char* v = ArgValue(argc, argv, "--max-timestamp-diff-ns")) {
+        o.maxTimestampDiffNs = std::strtoull(v, nullptr, 10);
+    }
     if (const char* v = ArgValue(argc, argv, "--width")) o.width = std::atoi(v);
     if (const char* v = ArgValue(argc, argv, "--height")) o.height = std::atoi(v);
     if (const char* v = ArgValue(argc, argv, "--fps")) o.fps = std::atof(v);
@@ -123,6 +124,7 @@ Options ParseOptions(int argc, char** argv)
     if (o.cameraSetupDelayMs < 0) throw std::runtime_error("--camera-setup-delay-ms must be >= 0");
     if (o.cameraOpenRetries < 1) throw std::runtime_error("--camera-open-retries must be >= 1");
     if (o.cameraRetryDelayMs < 0) throw std::runtime_error("--camera-retry-delay-ms must be >= 0");
+    if (o.maxTimestampDiffNs == 0) throw std::runtime_error("--max-timestamp-diff-ns must be > 0");
     return o;
 }
 
@@ -305,6 +307,27 @@ void PlaceLetterboxed(const cv::Mat& src, cv::Mat& canvas, const cv::Rect& cell)
     resized.copyTo(canvas(cv::Rect(x, y, width, height)));
 }
 
+void PrintPipelineStats(const std::vector<std::unique_ptr<IC4Ext::D3D12CameraCaptureThread>>& cameras,
+                        const IC4Ext::D3D12FrameSyncThread& syncThread,
+                        int displayedSets)
+{
+    const auto syncStats = syncThread.stats();
+    std::cout << "sets=" << displayedSets
+              << " syncInput=" << syncStats.inputFrames
+              << " syncEmitted=" << syncStats.emittedSets
+              << " syncDropped=" << syncStats.droppedFrames
+              << " syncIgnored=" << syncStats.ignoredFrames;
+
+    for (std::size_t i = 0; i < cameras.size(); ++i) {
+        const auto stats = cameras[i]->stats();
+        std::cout << " camera" << i
+                  << "{read=" << stats.readFrames
+                  << ",pushed=" << stats.pushedFrames
+                  << ",errors=" << stats.readErrors << "}";
+    }
+    std::cout << std::endl;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -318,7 +341,10 @@ int main(int argc, char** argv)
         std::cout << "Multi-camera two-phase setup: format=" << IC4Ext::ToString(options.cameraFormat)
                   << " interCameraSetupDelayMs=" << options.cameraSetupDelayMs
                   << " retries=" << options.cameraOpenRetries
-                  << " retryDelayMs=" << options.cameraRetryDelayMs << std::endl;
+                  << " retryDelayMs=" << options.cameraRetryDelayMs
+                  << " syncPolicy=timestamp-nearest"
+                  << " timestampSource=host-received"
+                  << " maxTimestampDiffNs=" << options.maxTimestampDiffNs << std::endl;
 
         std::vector<IC4Ext::D3D12CameraCapture> preparedCaptures;
         preparedCaptures.reserve(options.devices.size());
@@ -349,7 +375,8 @@ int main(int argc, char** argv)
         auto outputQueue = std::make_shared<IC4Ext::D3D12SyncedFrameQueue>(outputOptions);
 
         IC4Ext::FrameSyncOptions syncOptions;
-        syncOptions.policy = options.syncPolicy;
+        syncOptions.policy = IC4Ext::FrameSyncPolicy::TimestampNearest;
+        syncOptions.timestampSource = IC4Ext::FrameSyncTimestampSource::HostReceived;
         syncOptions.cameraIndices.clear();
         syncOptions.maxTimestampDiffNs = options.maxTimestampDiffNs;
         syncOptions.maxBufferedFramesPerCamera = 32;
@@ -415,6 +442,8 @@ int main(int argc, char** argv)
         cv::namedWindow("IC4Ext Multi-Camera Analysis", cv::WINDOW_NORMAL);
         int emittedSets = 0;
         bool running = true;
+        auto lastStatsPrint = std::chrono::steady_clock::now();
+
         while (running && (options.maxSets <= 0 || emittedSets < options.maxSets)) {
             if (options.triggerMode == TriggerMode::Software) {
                 for (auto& camera : cameras) {
@@ -426,7 +455,13 @@ int main(int argc, char** argv)
 
             auto set = outputQueue->waitPopFor(std::chrono::milliseconds(100));
             if (!set) {
-                running = cv::waitKey(1) != 27;
+                const auto now = std::chrono::steady_clock::now();
+                if (now - lastStatsPrint >= std::chrono::seconds(1)) {
+                    PrintPipelineStats(cameras, syncThread, emittedSets);
+                    lastStatsPrint = now;
+                }
+                const int key = cv::waitKey(1);
+                running = key != 27 && key != 'q' && key != 'Q';
                 continue;
             }
 
@@ -457,11 +492,8 @@ int main(int argc, char** argv)
 
             ++emittedSets;
             if ((emittedSets % 30) == 0) {
-                const auto stats = syncThread.stats();
-                std::cout << "sets=" << emittedSets
-                          << " input=" << stats.inputFrames
-                          << " dropped=" << stats.droppedFrames
-                          << " ignored=" << stats.ignoredFrames << '\n';
+                PrintPipelineStats(cameras, syncThread, emittedSets);
+                lastStatsPrint = std::chrono::steady_clock::now();
             }
 
             const int key = cv::waitKey(1);
