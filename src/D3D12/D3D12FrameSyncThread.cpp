@@ -167,8 +167,10 @@ bool D3D12FrameSyncThread::emitPassThrough(D3D12IndexedCameraFrame&& frame)
 {
     D3D12SyncedFrameSet set;
     set.syncGroupId = nextSyncGroupId_++;
-    set.emittedTime = std::chrono::steady_clock::now();
     set.frames.push_back(std::move(frame));
+    // The timestamp represents the submission point: the synchronized set is
+    // complete and is about to be pushed to the output queue.
+    set.emittedTime = std::chrono::steady_clock::now();
 
     auto result = outputQueue_->push(std::move(set));
     incrementEmittedOrPushFailure(result);
@@ -321,7 +323,6 @@ bool D3D12FrameSyncThread::emitFrontSet()
 
     D3D12SyncedFrameSet set;
     set.syncGroupId = nextSyncGroupId_++;
-    set.emittedTime = std::chrono::steady_clock::now();
     set.frames.reserve(buffers_.size());
 
     for (auto& buffer : buffers_) {
@@ -329,6 +330,8 @@ bool D3D12FrameSyncThread::emitFrontSet()
         buffer.frames.pop_front();
     }
 
+    // Timestamp immediately before the completed set is submitted to the output queue.
+    set.emittedTime = std::chrono::steady_clock::now();
     auto result = outputQueue_->push(std::move(set));
     incrementEmittedOrPushFailure(result);
     return IsQueuePushSucceeded(result);
