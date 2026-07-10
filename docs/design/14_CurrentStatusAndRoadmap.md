@@ -13,6 +13,10 @@ FrameTiming
 FrameFormatMetadata
 FrameChunkMetadata
 FrameReadbackCacheStats
+IC4StreamStatistics
+CameraTimingPerformance
+CameraTemperatureReading
+CameraPerformanceSnapshot
 CpuFrame
 ErrorInfo
 backend selection macros
@@ -30,6 +34,8 @@ D3D11DummyCameraCapture
 D3D11DummyCameraCaptureGenerator
 D3D11FrameReadback
 ```
+
+`D3D11CameraCapture::performance()` で IC4 stream statistics、最新 frame timing 由来の fps / jitter / frame number gap、DeviceTemperature を取得できます。
 
 `D3D11FrameReadback` は staging texture を size / format / subresource layout ごとに cache し、同一形状の連続 readback では staging texture を再利用します。`cacheStats()` と `resetCache()` で確認・解放できます。
 
@@ -49,7 +55,44 @@ D3D12FrameReadback
 
 D3D12 backend は D3D12Helper 統合済みです。
 
+`D3D12CameraCapture::performance()` で IC4 stream statistics、最新 frame timing 由来の fps / jitter / frame number gap、DeviceTemperature を取得できます。
+
 `D3D12FrameReadback` は必要サイズ以上の readback buffer を保持し、同一またはより小さい footprint の連続 readback では buffer を再利用します。`cacheStats()` と `resetCache()` で確認・解放できます。
+
+### Performance snapshot
+
+`CameraPerformanceSnapshot` は以下をまとめて返します。
+
+```txt
+CameraCaptureStats
+IC4StreamStatistics
+CameraTimingPerformance
+std::vector<CameraTemperatureReading>
+```
+
+`IC4StreamStatistics` は IC4 SDK の `Grabber::streamStatistics()` から取得します。
+
+```txt
+deviceDelivered
+deviceTransmissionError
+deviceTransformUnderrun
+deviceUnderrun
+transformDelivered
+transformUnderrun
+sinkDelivered
+sinkUnderrun
+sinkIgnored
+```
+
+`CameraTimingPerformance` は `FrameTiming` から計算します。
+
+```txt
+deviceFrameIntervalNs / deviceFps / deviceJitterNs
+hostReceiveIntervalNs / hostReceiveFps / hostJitterNs
+frameNumberGap / estimatedDroppedFrames / accumulatedEstimatedDroppedFrames
+```
+
+温度は `DeviceTemperatureSelector` がある場合は selector ごとに `DeviceTemperature` を読みます。selector がない場合は `DeviceTemperature` を直接読みます。温度 property がない機種では `temperatures` は空になります。
 
 ### Chunk metadata
 
@@ -148,6 +191,7 @@ queue overflow behavior
 setter during acquisition
 GPU memory growth
 fence wait stall
+performance snapshot stability
 ```
 
 ### 4. Real-camera readback integration test
@@ -165,4 +209,4 @@ synthetic texture readback test はありますが、実カメラから取得し
 4. Pixel format expansion if needed
 ```
 
-現在の実装では chunk metadata と readback resource reuse まで入ったため、次に大きく残っている機能は D3D12-D3D11 interop です。
+現在の実装では performance snapshot、chunk metadata、readback resource reuse まで入ったため、次に大きく残っている機能は D3D12-D3D11 interop です。
