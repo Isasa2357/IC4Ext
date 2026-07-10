@@ -46,6 +46,13 @@ enum class ShaderInputKind : std::uint32_t
     CsoFile = 2,
 };
 
+enum class CameraSyncMode : std::uint32_t
+{
+    None = 0,
+    HardwareTrigger = 1,
+    SoftwareTrigger = 2,
+};
+
 struct IC4StateJsonConfig
 {
     // IC Capture 4 state JSON exported by the official application.
@@ -99,6 +106,27 @@ struct ShaderLoadConfig
     bool preferCsoWhenBothExist = true;
 };
 
+struct CameraSyncConfig
+{
+    CameraSyncMode mode = CameraSyncMode::None;
+
+    // GenICam-style trigger properties. Values are strings because concrete line
+    // names and enum entries can vary by camera model.
+    std::string triggerSelector = "FrameStart";
+    std::string triggerSource;
+    std::string triggerActivation = "RisingEdge";
+    std::string triggerModeOnValue = "On";
+    std::string triggerModeOffValue = "Off";
+
+    bool applyTriggerActivation = true;
+    bool setExposureAutoOff = true;
+    std::string exposureAutoOffValue = "Off";
+    double exposureTimeUs = 0.0;
+
+    // Command property used by softwareTrigger(). IC4 command properties can be
+    // executed by setting a string value such as "execute".
+    std::string softwareTriggerCommand = "TriggerSoftware";
+};
 
 using IC4PropertyValue = std::variant<bool, std::int64_t, double, std::string>;
 
@@ -118,7 +146,8 @@ struct CameraCaptureConfig
     ShaderLoadConfig shaderConfig;
 
     // Applied after JSON state and stream/ROI settings. This is mainly used by
-    // D3D11CameraCaptureThread setters called before open().
+    // D3D11CameraCaptureThread setters called before open(). It is also the path
+    // used by ConfigureHardwareTriggerSync()/ConfigureSoftwareTriggerSync().
     std::vector<IC4PropertyOverride> propertyOverrides;
 };
 
@@ -152,9 +181,30 @@ struct FrameSyncOptions
 
 const char* ToString(CameraPixelFormat fmt) noexcept;
 const char* ToString(GpuFrameFormat fmt) noexcept;
+const char* ToString(CameraSyncMode mode) noexcept;
 std::size_t BytesPerPixel(CameraPixelFormat fmt) noexcept;
 bool IsSupportedConversion(CameraPixelFormat input, GpuFrameFormat output) noexcept;
 
 bool ParseCameraPixelFormat(const std::string& text, CameraPixelFormat& out) noexcept;
+
+CameraSyncConfig MakeNoSyncConfig(std::string triggerSelector = "FrameStart");
+CameraSyncConfig MakeHardwareTriggerSyncConfig(std::string triggerSource = "Line1",
+                                               std::string triggerSelector = "FrameStart",
+                                               std::string triggerActivation = "RisingEdge");
+CameraSyncConfig MakeSoftwareTriggerSyncConfig(std::string triggerSelector = "FrameStart",
+                                               std::string softwareTriggerCommand = "TriggerSoftware");
+
+// Materializes sync configuration into CameraCaptureConfig::propertyOverrides.
+// Call this before open()/D3D*CameraCaptureThread::start(). Existing overrides
+// for the same property names are replaced.
+void ConfigureCameraSync(CameraCaptureConfig& config, const CameraSyncConfig& sync);
+void ConfigureNoSync(CameraCaptureConfig& config, std::string triggerSelector = "FrameStart");
+void ConfigureHardwareTriggerSync(CameraCaptureConfig& config,
+                                  std::string triggerSource = "Line1",
+                                  std::string triggerSelector = "FrameStart",
+                                  std::string triggerActivation = "RisingEdge");
+void ConfigureSoftwareTriggerSync(CameraCaptureConfig& config,
+                                  std::string triggerSelector = "FrameStart",
+                                  std::string softwareTriggerCommand = "TriggerSoftware");
 
 } // namespace IC4Ext
