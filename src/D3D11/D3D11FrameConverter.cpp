@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <vector>
@@ -13,6 +14,13 @@
 namespace IC4Ext {
 
 namespace {
+
+std::string HrToString(HRESULT hr)
+{
+    std::ostringstream oss;
+    oss << "HRESULT=0x" << std::hex << static_cast<unsigned long>(hr);
+    return oss.str();
+}
 
 DXGI_FORMAT ToDxgi(GpuFrameFormat fmt)
 {
@@ -94,14 +102,34 @@ bool D3D11FrameConverter::initialize(ID3D11Device* device,
                                      D3D11FenceManager* fenceManager,
                                      const ShaderLoadConfig& shaderConfig)
 {
-    (void)device;
-    (void)context;
-    (void)fenceManager;
-    (void)shaderConfig;
-    setError(ErrorCode::InvalidArgument,
-             "D3D11FrameConverter::initialize",
-             "Raw ID3D11Device/ID3D11DeviceContext initialization is intentionally unsupported in the helper-integrated backend. Use initialize(D3D11Core*, ...).");
-    return false;
+    lastError_ = NoError();
+    if (!device || !context || !fenceManager) {
+        setError(ErrorCode::InvalidArgument, "D3D11FrameConverter::initialize", "device/context/fenceManager is null");
+        return false;
+    }
+
+    core_ = nullptr;
+    device_ = device;
+    context_ = context;
+    fenceManager_ = fenceManager;
+    shaderConfig_ = shaderConfig;
+
+    if (shaderConfig_.shaderDirectory.empty()) {
+        shaderConfig_.shaderDirectory = std::filesystem::current_path() / "shaders" / "d3d11";
+    }
+    if (shaderConfig_.entryPoint.empty()) {
+        shaderConfig_.entryPoint = "main";
+    }
+    if (shaderConfig_.target.empty()) {
+        shaderConfig_.target = "cs_5_0";
+    }
+
+    UINT support = 0;
+    HRESULT hr = device_->CheckFormatSupport(DXGI_FORMAT_R8_UNORM, &support);
+    if (FAILED(hr) || (support & D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW) == 0) {
+        // Mono8->R8 will fail later. Do not make the entire converter unusable because RGBA8 paths are still valid.
+    }
+    return true;
 }
 
 bool D3D11FrameConverter::isSupported(CameraPixelFormat input, GpuFrameFormat output) const noexcept
@@ -189,7 +217,7 @@ bool D3D11FrameConverter::createRawInputBuffer(const CpuFrameView& input,
                                                D3D11CoreLib::D3D11Resource& buffer,
                                                Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>& srv)
 {
-    if (!core_ || !input.data || input.dataSize == 0) {
+    if (!input.data || input.dataSize == 0) {
         setError(ErrorCode::InvalidArgument, "D3D11FrameConverter::createRawInputBuffer", "input data is null or empty");
         return false;
     }
@@ -198,20 +226,51 @@ bool D3D11FrameConverter::createRawInputBuffer(const CpuFrameView& input,
         return false;
     }
 
-    try {
-        buffer = D3D11CoreLib::CreateBuffer(*core_,
-                                            static_cast<UINT>(input.dataSize),
-                                            D3D11_USAGE_DEFAULT,
-                                            D3D11_BIND_SHADER_RESOURCE,
-                                            0,
-                                            0,
-                                            input.data);
-        srv = D3D11CoreLib::CreateBufferSrv(*core_, buffer, 0, static_cast<UINT>(input.dataSize), DXGI_FORMAT_R8_UINT);
-        return true;
-    } catch (const std::exception& e) {
-        setError(ErrorCode::D3D11Error, "D3D11FrameConverter::createRawInputBuffer", e.what());
+    if (core_) {
+        try {
+            buffer = D3D11CoreLib::CreateBuffer(*core_,
+                                                static_cast<UINT>(input.dataSize),
+                                                D3D11_USAGE_DEFAULT,
+                                                D3D11_BIND_SHADER_RESOURCE,
+                                                0,
+                                                0,
+                                                input.data);
+            srv = D3D11CoreLib::CreateBufferSrv(*core_, buffer, 0, static_cast<UINT>(input.dataSize), DXGI_FORMAT_R8_UINT);
+            return true;
+        } catch (const std::exception& e) {
+            setError(ErrorCode::D3D11Error, "D3D11FrameConverter::createRawInputBuffer", e.what());
+            return false;
+        }
+    }
+
+    D3D11_BUFFER_DESC desc = {};
+    desc.ByteWidth = static_cast<UINT>(input.dataSize);
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+    D3D11_SUBRESOURCE_DATA init = {};
+    init.pSysMem = input.data;
+
+    Microsoft::WRL::ComPtr<ID3D11Buffer> rawBuffer;
+    HRESULT hr = device_->CreateBuffer(&desc, &init, &rawBuffer);
+    if (FAILED(hr)) {
+        setError(ErrorCode::D3D11Error, "D3D11FrameConverter::createRawInputBuffer / CreateBuffer", HrToString(hr));
         return false;
     }
+
+    D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Format = DXGI_FORMAT_R8_UINT;
+    srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+    srvDesc.Buffer.FirstElement = 0;
+    srvDesc.Buffer.NumElements = static_cast<UINT>(input.dataSize);
+
+    hr = device_->CreateShaderResourceView(rawBuffer.Get(), &srvDesc, &srv);
+    if (FAILED(hr)) {
+        setError(ErrorCode::D3D11Error, "D3D11FrameConverter::createRawInputBuffer / CreateShaderResourceView", HrToString(hr));
+        return false;
+    }
+    buffer = D3D11CoreLib::D3D11Resource(std::move(rawBuffer));
+    return true;
 }
 
 bool D3D11FrameConverter::createOutputTexture(const CpuFrameView& input,
@@ -225,33 +284,64 @@ bool D3D11FrameConverter::createOutputTexture(const CpuFrameView& input,
         return false;
     }
 
-    try {
-        UINT bindFlags = D3D11_BIND_UNORDERED_ACCESS;
-        if (spec.createSrv) bindFlags |= D3D11_BIND_SHADER_RESOURCE;
+    UINT bindFlags = D3D11_BIND_UNORDERED_ACCESS;
+    if (spec.createSrv) bindFlags |= D3D11_BIND_SHADER_RESOURCE;
 
-        textureResource = D3D11CoreLib::CreateTexture2D(*core_,
-                                                        static_cast<UINT>(input.format.width),
-                                                        static_cast<UINT>(input.format.height),
-                                                        format,
-                                                        bindFlags);
-        outFrame.texture = textureResource.AsTexture2D();
-        if (!outFrame.texture) {
-            setError(ErrorCode::D3D11Error, "D3D11FrameConverter::createOutputTexture", "created resource is not a Texture2D");
+    if (core_) {
+        try {
+            textureResource = D3D11CoreLib::CreateTexture2D(*core_,
+                                                            static_cast<UINT>(input.format.width),
+                                                            static_cast<UINT>(input.format.height),
+                                                            format,
+                                                            bindFlags);
+            outFrame.texture = textureResource.AsTexture2D();
+            if (!outFrame.texture) {
+                setError(ErrorCode::D3D11Error, "D3D11FrameConverter::createOutputTexture", "created resource is not a Texture2D");
+                return false;
+            }
+
+            if (spec.createSrv) {
+                outFrame.srv = D3D11CoreLib::CreateTexture2DSrv(*core_, textureResource, format);
+            }
+            outFrame.uav = D3D11CoreLib::CreateTexture2DUav(*core_, textureResource, format);
+            return true;
+        } catch (const std::exception& e) {
+            setError(ErrorCode::D3D11Error, "D3D11FrameConverter::createOutputTexture", e.what());
             return false;
         }
+    }
 
-        if (spec.createSrv) {
-            outFrame.srv = D3D11CoreLib::CreateTexture2DSrv(*core_, textureResource, format);
-        }
-        // The compute conversion always requires an UAV, even if the public output spec
-        // says the caller does not need to keep one afterwards. For simplicity, the
-        // created UAV remains attached to the frame, matching previous behavior.
-        outFrame.uav = D3D11CoreLib::CreateTexture2DUav(*core_, textureResource, format);
-        return true;
-    } catch (const std::exception& e) {
-        setError(ErrorCode::D3D11Error, "D3D11FrameConverter::createOutputTexture", e.what());
+    D3D11_TEXTURE2D_DESC desc = {};
+    desc.Width = static_cast<UINT>(input.format.width);
+    desc.Height = static_cast<UINT>(input.format.height);
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = format;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = bindFlags;
+
+    HRESULT hr = device_->CreateTexture2D(&desc, nullptr, &outFrame.texture);
+    if (FAILED(hr)) {
+        setError(ErrorCode::D3D11Error, "D3D11FrameConverter::createOutputTexture / CreateTexture2D", HrToString(hr));
         return false;
     }
+
+    if (spec.createSrv) {
+        hr = device_->CreateShaderResourceView(outFrame.texture.Get(), nullptr, &outFrame.srv);
+        if (FAILED(hr)) {
+            setError(ErrorCode::D3D11Error, "D3D11FrameConverter::createOutputTexture / CreateShaderResourceView", HrToString(hr));
+            return false;
+        }
+    }
+
+    hr = device_->CreateUnorderedAccessView(outFrame.texture.Get(), nullptr, &outFrame.uav);
+    if (FAILED(hr)) {
+        setError(ErrorCode::D3D11Error, "D3D11FrameConverter::createOutputTexture / CreateUnorderedAccessView", HrToString(hr));
+        return false;
+    }
+    textureResource = D3D11CoreLib::D3D11Resource(outFrame.texture);
+    return true;
 }
 
 bool D3D11FrameConverter::createConstantBuffer(const CpuFrameView& input, D3D11CoreLib::D3D11Resource& buffer)
@@ -262,13 +352,32 @@ bool D3D11FrameConverter::createConstantBuffer(const CpuFrameView& input, D3D11C
     constants.inputRowPitchBytes = static_cast<std::uint32_t>(input.format.inputRowPitchBytes);
     constants.inputPixelFormat = static_cast<std::uint32_t>(input.format.actualInputFormat);
 
-    try {
-        buffer = D3D11CoreLib::CreateConstantBuffer(*core_, sizeof(ConvertConstants), &constants);
-        return true;
-    } catch (const std::exception& e) {
-        setError(ErrorCode::D3D11Error, "D3D11FrameConverter::createConstantBuffer", e.what());
+    if (core_) {
+        try {
+            buffer = D3D11CoreLib::CreateConstantBuffer(*core_, sizeof(ConvertConstants), &constants);
+            return true;
+        } catch (const std::exception& e) {
+            setError(ErrorCode::D3D11Error, "D3D11FrameConverter::createConstantBuffer", e.what());
+            return false;
+        }
+    }
+
+    D3D11_BUFFER_DESC desc = {};
+    desc.ByteWidth = sizeof(ConvertConstants);
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+
+    D3D11_SUBRESOURCE_DATA init = {};
+    init.pSysMem = &constants;
+
+    Microsoft::WRL::ComPtr<ID3D11Buffer> rawBuffer;
+    HRESULT hr = device_->CreateBuffer(&desc, &init, &rawBuffer);
+    if (FAILED(hr)) {
+        setError(ErrorCode::D3D11Error, "D3D11FrameConverter::createConstantBuffer", HrToString(hr));
         return false;
     }
+    buffer = D3D11CoreLib::D3D11Resource(std::move(rawBuffer));
+    return true;
 }
 
 bool D3D11FrameConverter::convert(const CpuFrameView& input,
@@ -278,8 +387,8 @@ bool D3D11FrameConverter::convert(const CpuFrameView& input,
     lastError_ = NoError();
     outFrame = {};
 
-    if (!core_ || !context_ || !fenceManager_) {
-        setError(ErrorCode::InvalidArgument, "D3D11FrameConverter::convert", "converter is not initialized with D3D11Core");
+    if (!device_ || !context_ || !fenceManager_) {
+        setError(ErrorCode::InvalidArgument, "D3D11FrameConverter::convert", "converter is not initialized");
         return false;
     }
 
