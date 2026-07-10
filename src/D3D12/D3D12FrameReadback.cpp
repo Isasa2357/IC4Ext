@@ -175,6 +175,9 @@ bool D3D12FrameReadback::readback(const D3D12CameraFrame& frame,
                                                         out,
                                                         &lastError_);
         readbackBuffer.Unmap();
+        if (ok) {
+            out.chunkMetadata = frame.chunkMetadata;
+        }
         return ok;
     } catch (const std::exception& e) {
         setError(ErrorCode::D3D12Error, "D3D12FrameReadback::readback", e.what());
