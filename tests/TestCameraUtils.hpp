@@ -68,12 +68,18 @@ inline std::size_t CountIC4Devices()
     }
 
     std::size_t count = 0;
-    ic4::Error err;
-    auto devices = ic4::DeviceEnum::enumDevices(err);
-    if (err.isError()) {
-        std::cerr << "IC4 device enumeration failed: " << err.message() << "\n";
-    } else {
-        count = devices.size();
+
+    // All IC4 wrapper objects must be destroyed before exitLibrary(). In particular,
+    // DeviceInfo and Error can retain library-owned state whose destructors require
+    // the IC4 runtime to remain initialized.
+    {
+        ic4::Error err;
+        auto devices = ic4::DeviceEnum::enumDevices(err);
+        if (err.isError()) {
+            std::cerr << "IC4 device enumeration failed: " << err.message() << "\n";
+        } else {
+            count = devices.size();
+        }
     }
 
     ic4::exitLibrary();
