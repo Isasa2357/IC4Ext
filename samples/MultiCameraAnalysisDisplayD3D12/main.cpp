@@ -19,6 +19,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -82,8 +83,8 @@ struct Options
     int height = 0;
     double fps = 0.0;
     IC4Ext::CameraPixelFormat cameraFormat = IC4Ext::CameraPixelFormat::BayerRG8;
-    int cameraStartDelayMs = 2000;
-    int cameraStartRetries = 3;
+    int cameraSetupDelayMs = 1000;
+    int cameraOpenRetries = 3;
     int cameraRetryDelayMs = 3000;
     int canvasWidth = 1600;
     int canvasHeight = 900;
@@ -105,9 +106,11 @@ Options ParseOptions(int argc, char** argv)
     if (const char* v = ArgValue(argc, argv, "--height")) o.height = std::atoi(v);
     if (const char* v = ArgValue(argc, argv, "--fps")) o.fps = std::atof(v);
     if (const char* v = ArgValue(argc, argv, "--format")) o.cameraFormat = ParseCameraFormat(v);
-    if (const char* v = ArgValue(argc, argv, "--camera-start-delay-ms")) o.cameraStartDelayMs = std::atoi(v);
-    if (const char* v = ArgValue(argc, argv, "--camera-start-retries")) o.cameraStartRetries = std::atoi(v);
+    if (const char* v = ArgValue(argc, argv, "--camera-setup-delay-ms")) o.cameraSetupDelayMs = std::atoi(v);
+    if (const char* v = ArgValue(argc, argv, "--camera-open-retries")) o.cameraOpenRetries = std::atoi(v);
     if (const char* v = ArgValue(argc, argv, "--camera-retry-delay-ms")) o.cameraRetryDelayMs = std::atoi(v);
+    if (const char* v = ArgValue(argc, argv, "--camera-start-delay-ms")) o.cameraSetupDelayMs = std::atoi(v);
+    if (const char* v = ArgValue(argc, argv, "--camera-start-retries")) o.cameraOpenRetries = std::atoi(v);
     if (const char* v = ArgValue(argc, argv, "--canvas-width")) o.canvasWidth = std::atoi(v);
     if (const char* v = ArgValue(argc, argv, "--canvas-height")) o.canvasHeight = std::atoi(v);
     if (const char* v = ArgValue(argc, argv, "--sets")) o.maxSets = std::atoi(v);
@@ -117,36 +120,70 @@ Options ParseOptions(int argc, char** argv)
 
     if (o.devices.size() < 2) throw std::runtime_error("--devices must contain at least two indices");
     if (o.canvasWidth <= 0 || o.canvasHeight <= 0) throw std::runtime_error("Canvas size must be positive");
-    if (o.cameraStartDelayMs < 0) throw std::runtime_error("--camera-start-delay-ms must be >= 0");
-    if (o.cameraStartRetries < 1) throw std::runtime_error("--camera-start-retries must be >= 1");
+    if (o.cameraSetupDelayMs < 0) throw std::runtime_error("--camera-setup-delay-ms must be >= 0");
+    if (o.cameraOpenRetries < 1) throw std::runtime_error("--camera-open-retries must be >= 1");
     if (o.cameraRetryDelayMs < 0) throw std::runtime_error("--camera-retry-delay-ms must be >= 0");
     return o;
 }
 
-bool StartCameraWithRetry(IC4Ext::D3D12CameraCaptureThread& camera,
-                          std::size_t cameraSlot,
-                          int deviceIndex,
-                          int maxAttempts,
-                          int retryDelayMs)
+IC4Ext::CameraCaptureConfig MakeCameraConfig(const Options& options)
+{
+    IC4Ext::CameraCaptureConfig config;
+    config.streamRequest.width = options.width;
+    config.streamRequest.height = options.height;
+    config.streamRequest.fps = options.fps;
+    config.streamRequest.requestedFormat = options.cameraFormat;
+    config.streamRequest.forceRequestedFormat = true;
+    config.outputSpec.outputFormat = IC4Ext::GpuFrameFormat::RGBA8;
+    config.queuePolicy = IC4Ext::FrameQueuePolicy::PreserveFrames;
+    config.maxPendingBuffers = 32;
+    config.shaderConfig.shaderDirectory = std::filesystem::current_path() / "shaders" / "d3d12";
+
+    if (options.triggerMode == TriggerMode::Hardware) {
+        IC4Ext::ConfigureHardwareTriggerSync(config, options.triggerSource);
+    } else if (options.triggerMode == TriggerMode::Software) {
+        IC4Ext::ConfigureSoftwareTriggerSync(config);
+    } else {
+        IC4Ext::ConfigureNoSync(config);
+    }
+    return config;
+}
+
+bool OpenAndPauseCapture(IC4Ext::D3D12CameraCapture& capture,
+                         const IC4Ext::IC4DeviceSelector& selector,
+                         const IC4Ext::CameraCaptureConfig& config,
+                         const IC4Ext::D3D12BackendContext& backend,
+                         std::size_t cameraSlot,
+                         int deviceIndex,
+                         int maxAttempts,
+                         int retryDelayMs)
 {
     for (int attempt = 1; attempt <= maxAttempts; ++attempt) {
-        std::cout << "Starting camera slot=" << cameraSlot
+        std::cout << "Preparing camera slot=" << cameraSlot
                   << " deviceIndex=" << deviceIndex
                   << " attempt=" << attempt << "/" << maxAttempts << std::endl;
 
-        if (camera.start()) {
-            std::cout << "Started camera slot=" << cameraSlot
-                      << " deviceIndex=" << deviceIndex << std::endl;
-            return true;
+        if (capture.open(selector, config, backend)) {
+            if (capture.setIC4Property("AcquisitionStop", std::string("execute"))) {
+                std::cout << "Prepared camera slot=" << cameraSlot
+                          << " deviceIndex=" << deviceIndex
+                          << " (stream configured, acquisition paused)" << std::endl;
+                return true;
+            }
+
+            const auto stopError = capture.lastError();
+            std::cerr << "AcquisitionStop failed slot=" << cameraSlot
+                      << " deviceIndex=" << deviceIndex
+                      << ": " << stopError.where << ": " << stopError.message << std::endl;
+            capture.close();
+        } else {
+            const auto openError = capture.lastError();
+            std::cerr << "Camera prepare failed slot=" << cameraSlot
+                      << " deviceIndex=" << deviceIndex
+                      << " attempt=" << attempt << "/" << maxAttempts
+                      << ": " << openError.where << ": " << openError.message << std::endl;
         }
 
-        const auto error = camera.lastError();
-        std::cerr << "Camera start failed slot=" << cameraSlot
-                  << " deviceIndex=" << deviceIndex
-                  << " attempt=" << attempt << "/" << maxAttempts
-                  << ": " << error.where << ": " << error.message << std::endl;
-
-        camera.stopAndJoin();
         if (attempt < maxAttempts && retryDelayMs > 0) {
             std::cout << "Retrying camera deviceIndex=" << deviceIndex
                       << " after " << retryDelayMs << " ms" << std::endl;
@@ -170,7 +207,7 @@ struct AnalysisResult
 
 AnalysisResult AnalyzeAndAnnotate(cv::Mat& bgr,
                                   MotionState& state,
-                                  int cameraIndex,
+                                  int physicalDeviceIndex,
                                   int thresholdValue,
                                   int minArea)
 {
@@ -205,7 +242,7 @@ AnalysisResult AnalyzeAndAnnotate(cv::Mat& bgr,
     gray.copyTo(state.previousGray);
 
     std::ostringstream line1;
-    line1 << "Camera " << cameraIndex;
+    line1 << "Device " << physicalDeviceIndex;
     std::ostringstream line2;
     line2 << std::fixed << std::setprecision(1)
           << "Luma: " << result.meanLuminance
@@ -217,7 +254,6 @@ AnalysisResult AnalyzeAndAnnotate(cv::Mat& bgr,
                 0.65, cv::Scalar(0, 255, 0), 2, cv::LINE_AA);
     cv::putText(bgr, line2.str(), cv::Point(12, 49), cv::FONT_HERSHEY_SIMPLEX,
                 0.55, cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
-
     return result;
 }
 
@@ -275,15 +311,39 @@ int main(int argc, char** argv)
 {
     try {
         const Options options = ParseOptions(argc, argv);
-
         auto core = D3D12CoreLib::D3D12Core::CreateShared();
         auto backend = IC4Ext::D3D12BackendContext::FromCore(core);
         if (!backend.resolve()) throw std::runtime_error("Failed to resolve D3D12 backend");
 
+        std::cout << "Multi-camera two-phase setup: format=" << IC4Ext::ToString(options.cameraFormat)
+                  << " interCameraSetupDelayMs=" << options.cameraSetupDelayMs
+                  << " retries=" << options.cameraOpenRetries
+                  << " retryDelayMs=" << options.cameraRetryDelayMs << std::endl;
+
+        std::vector<IC4Ext::D3D12CameraCapture> preparedCaptures;
+        preparedCaptures.reserve(options.devices.size());
+        for (std::size_t i = 0; i < options.devices.size(); ++i) {
+            IC4Ext::IC4DeviceSelector selector;
+            selector.deviceIndex = options.devices[i];
+            IC4Ext::D3D12CameraCapture capture;
+            const auto config = MakeCameraConfig(options);
+            if (!OpenAndPauseCapture(capture, selector, config, backend, i, options.devices[i],
+                                     options.cameraOpenRetries, options.cameraRetryDelayMs)) {
+                throw std::runtime_error("Camera prepare permanently failed slot=" + std::to_string(i) +
+                                         " deviceIndex=" + std::to_string(options.devices[i]) +
+                                         ": " + capture.lastError().where + ": " + capture.lastError().message);
+            }
+            preparedCaptures.push_back(std::move(capture));
+            if (i + 1 < options.devices.size() && options.cameraSetupDelayMs > 0) {
+                std::cout << "Waiting " << options.cameraSetupDelayMs
+                          << " ms before preparing the next camera" << std::endl;
+                std::this_thread::sleep_for(std::chrono::milliseconds(options.cameraSetupDelayMs));
+            }
+        }
+
         ThreadKit::Queues::QueueOptions inputOptions;
         inputOptions.maxSize = 128;
         auto inputQueue = std::make_shared<IC4Ext::D3D12IndexedFrameQueue>(inputOptions);
-
         ThreadKit::Queues::QueueOptions outputOptions;
         outputOptions.maxSize = 8;
         auto outputQueue = std::make_shared<IC4Ext::D3D12SyncedFrameQueue>(outputOptions);
@@ -301,62 +361,32 @@ int main(int argc, char** argv)
         if (!syncThread.start()) throw std::runtime_error(syncThread.lastError().message);
 
         std::vector<std::unique_ptr<IC4Ext::D3D12CameraCaptureThread>> cameras;
-        cameras.reserve(options.devices.size());
+        cameras.reserve(preparedCaptures.size());
         IC4Ext::CameraThreadOptions threadOptions;
         threadOptions.readTimeoutMs = 1000;
         threadOptions.copyPerOutputQueue = false;
+        threadOptions.stopOnReadError = false;
 
-        std::cout << "Multi-camera startup: format=" << IC4Ext::ToString(options.cameraFormat)
-                  << " interCameraDelayMs=" << options.cameraStartDelayMs
-                  << " retries=" << options.cameraStartRetries
-                  << " retryDelayMs=" << options.cameraRetryDelayMs << std::endl;
-
-        for (std::size_t i = 0; i < options.devices.size(); ++i) {
-            IC4Ext::IC4DeviceSelector selector;
-            selector.deviceIndex = options.devices[i];
-
-            IC4Ext::CameraCaptureConfig config;
-            config.streamRequest.width = options.width;
-            config.streamRequest.height = options.height;
-            config.streamRequest.fps = options.fps;
-            config.streamRequest.requestedFormat = options.cameraFormat;
-            config.streamRequest.forceRequestedFormat = true;
-            config.outputSpec.outputFormat = IC4Ext::GpuFrameFormat::RGBA8;
-            config.queuePolicy = IC4Ext::FrameQueuePolicy::PreserveFrames;
-            config.maxPendingBuffers = 32;
-            config.shaderConfig.shaderDirectory = std::filesystem::current_path() / "shaders" / "d3d12";
-
-            if (options.triggerMode == TriggerMode::Hardware) {
-                IC4Ext::ConfigureHardwareTriggerSync(config, options.triggerSource);
-            } else if (options.triggerMode == TriggerMode::Software) {
-                IC4Ext::ConfigureSoftwareTriggerSync(config);
-            } else {
-                IC4Ext::ConfigureNoSync(config);
-            }
-
+        for (std::size_t i = 0; i < preparedCaptures.size(); ++i) {
             auto camera = std::make_unique<IC4Ext::D3D12CameraCaptureThread>(
-                selector, config, backend, threadOptions);
+                std::move(preparedCaptures[i]), backend, threadOptions);
             camera->addOutputQueue(static_cast<std::uint32_t>(i), inputQueue);
-
-            if (!StartCameraWithRetry(*camera,
-                                      i,
-                                      options.devices[i],
-                                      options.cameraStartRetries,
-                                      options.cameraRetryDelayMs)) {
-                const auto error = camera->lastError();
-                throw std::runtime_error("Camera start permanently failed slot=" +
-                                         std::to_string(i) +
+            if (!camera->start()) {
+                throw std::runtime_error("Camera worker start failed slot=" + std::to_string(i) +
                                          " deviceIndex=" + std::to_string(options.devices[i]) +
-                                         ": " + error.where + ": " + error.message);
+                                         ": " + camera->lastError().where + ": " + camera->lastError().message);
             }
-
             cameras.push_back(std::move(camera));
+        }
 
-            if (i + 1 < options.devices.size() && options.cameraStartDelayMs > 0) {
-                std::cout << "Waiting " << options.cameraStartDelayMs
-                          << " ms before opening the next camera" << std::endl;
-                std::this_thread::sleep_for(std::chrono::milliseconds(options.cameraStartDelayMs));
+        for (std::size_t i = 0; i < cameras.size(); ++i) {
+            if (!cameras[i]->setIC4Property("AcquisitionStart", std::string("execute"))) {
+                throw std::runtime_error("AcquisitionStart failed slot=" + std::to_string(i) +
+                                         " deviceIndex=" + std::to_string(options.devices[i]) +
+                                         ": " + cameras[i]->lastError().where + ": " + cameras[i]->lastError().message);
             }
+            std::cout << "Acquisition started slot=" << i
+                      << " deviceIndex=" << options.devices[i] << std::endl;
         }
 
         std::vector<IC4Ext::D3D12FrameReadback> readbacks(cameras.size());
@@ -373,17 +403,11 @@ int main(int argc, char** argv)
         cv::VideoWriter writer;
         if (!options.recordPath.empty()) {
             const double recordFps = options.fps > 0.0 ? options.fps : 30.0;
-            writer.open(options.recordPath.string(),
-                        cv::VideoWriter::fourcc('a', 'v', 'c', '1'),
-                        recordFps,
-                        canvas.size(),
-                        true);
+            writer.open(options.recordPath.string(), cv::VideoWriter::fourcc('a', 'v', 'c', '1'),
+                        recordFps, canvas.size(), true);
             if (!writer.isOpened()) {
-                writer.open(options.recordPath.string(),
-                            cv::VideoWriter::fourcc('m', 'p', '4', 'v'),
-                            recordFps,
-                            canvas.size(),
-                            true);
+                writer.open(options.recordPath.string(), cv::VideoWriter::fourcc('m', 'p', '4', 'v'),
+                            recordFps, canvas.size(), true);
             }
             if (!writer.isOpened()) throw std::runtime_error("Failed to open VideoWriter");
         }
@@ -391,7 +415,6 @@ int main(int argc, char** argv)
         cv::namedWindow("IC4Ext Multi-Camera Analysis", cv::WINDOW_NORMAL);
         int emittedSets = 0;
         bool running = true;
-
         while (running && (options.maxSets <= 0 || emittedSets < options.maxSets)) {
             if (options.triggerMode == TriggerMode::Software) {
                 for (auto& camera : cameras) {
@@ -403,15 +426,13 @@ int main(int argc, char** argv)
 
             auto set = outputQueue->waitPopFor(std::chrono::milliseconds(100));
             if (!set) {
-                const int key = cv::waitKey(1);
-                running = key != 27 && key != 'q' && key != 'Q';
+                running = cv::waitKey(1) != 27;
                 continue;
             }
 
             canvas.setTo(cv::Scalar(16, 16, 16));
             for (const auto& indexed : set->frames) {
                 if (indexed.cameraIndex >= readbacks.size()) continue;
-
                 IC4Ext::CpuFrame cpu;
                 auto& readback = readbacks[indexed.cameraIndex];
                 if (!readback.readback(indexed.frame, IC4Ext::CpuFrameFormat::RGBA8, cpu, 5000)) {
@@ -419,18 +440,15 @@ int main(int argc, char** argv)
                 }
 
                 cv::Mat bgr = CpuFrameToBgr(cpu);
-                AnalyzeAndAnnotate(bgr,
-                                   motionStates[indexed.cameraIndex],
-                                   static_cast<int>(indexed.cameraIndex),
-                                   options.motionThreshold,
-                                   options.minMotionArea);
+                AnalyzeAndAnnotate(bgr, motionStates[indexed.cameraIndex],
+                                   options.devices[indexed.cameraIndex],
+                                   options.motionThreshold, options.minMotionArea);
 
                 const int column = static_cast<int>(indexed.cameraIndex) % grid.columns;
                 const int row = static_cast<int>(indexed.cameraIndex) / grid.columns;
                 const cv::Rect cell(grid.gap + column * (cellWidth + grid.gap),
                                     grid.gap + row * (cellHeight + grid.gap),
-                                    cellWidth,
-                                    cellHeight);
+                                    cellWidth, cellHeight);
                 PlaceLetterboxed(bgr, canvas, cell);
             }
 
