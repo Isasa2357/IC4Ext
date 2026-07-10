@@ -8,6 +8,27 @@
 
 namespace {
 
+class IC4LibraryGuard
+{
+public:
+    IC4LibraryGuard()
+    {
+        ic4::InitLibraryConfig config;
+        config.defaultErrorHandlerBehavior = ic4::ErrorHandlerBehavior::Ignore;
+        initialized_ = ic4::initLibrary(config);
+    }
+
+    ~IC4LibraryGuard()
+    {
+        if (initialized_) ic4::exitLibrary();
+    }
+
+    bool initialized() const noexcept { return initialized_; }
+
+private:
+    bool initialized_ = false;
+};
+
 const char* ArgValue(int argc, char** argv, const char* name)
 {
     for (int i = 1; i + 1 < argc; ++i) {
@@ -59,21 +80,34 @@ void PrintDevice(std::size_t index, const ic4::DeviceInfo& device)
         return;
     }
 
-    ic4::Error err;
-    const auto displayName = interface.interfaceDisplayName(err);
-    std::cout << "  interface   : " << (err.isError() ? std::string("<error: ") + ErrorText(err) + ">" : displayName) << "\n";
-
-    err = {};
-    const auto tlName = interface.transportLayerName(err);
-    std::cout << "  tlName      : " << (err.isError() ? std::string("<error: ") + ErrorText(err) + ">" : tlName) << "\n";
-
-    err = {};
-    const auto tlVersion = interface.transportLayerVersion(err);
-    std::cout << "  tlVersion   : " << (err.isError() ? std::string("<error: ") + ErrorText(err) + ">" : tlVersion) << "\n";
-
-    err = {};
-    const auto tlType = interface.transportLayerType(err);
-    std::cout << "  tlType      : " << (err.isError() ? std::string("<error: ") + ErrorText(err) + ">" : TransportTypeName(tlType)) << "\n";
+    {
+        ic4::Error err;
+        const auto value = interface.interfaceDisplayName(err);
+        std::cout << "  interface   : "
+                  << (err.isError() ? std::string("<error: ") + ErrorText(err) + ">" : value)
+                  << "\n";
+    }
+    {
+        ic4::Error err;
+        const auto value = interface.transportLayerName(err);
+        std::cout << "  tlName      : "
+                  << (err.isError() ? std::string("<error: ") + ErrorText(err) + ">" : value)
+                  << "\n";
+    }
+    {
+        ic4::Error err;
+        const auto value = interface.transportLayerVersion(err);
+        std::cout << "  tlVersion   : "
+                  << (err.isError() ? std::string("<error: ") + ErrorText(err) + ">" : value)
+                  << "\n";
+    }
+    {
+        ic4::Error err;
+        const auto value = interface.transportLayerType(err);
+        std::cout << "  tlType      : "
+                  << (err.isError() ? std::string("<error: ") + ErrorText(err) + ">" : TransportTypeName(value))
+                  << "\n";
+    }
 }
 
 void PrintInteger(ic4::PropertyMap& properties,
@@ -147,113 +181,93 @@ void PrintEnumeration(ic4::PropertyMap& properties,
 
 int main(int argc, char** argv)
 {
-    ic4::InitLibraryConfig initConfig;
-    initConfig.defaultErrorHandlerBehavior = ic4::ErrorHandlerBehavior::Ignore;
-    if (!ic4::initLibrary(initConfig)) {
+    IC4LibraryGuard library;
+    if (!library.initialized()) {
         std::cerr << "ic4::initLibrary failed\n";
         return 1;
     }
 
-    int resultCode = 0;
-    {
-        ic4::Error enumError;
-        const auto devices = ic4::DeviceEnum::enumDevices(enumError);
-        if (enumError.isError()) {
-            std::cerr << "Device enumeration failed: " << ErrorText(enumError) << "\n";
-            ic4::exitLibrary();
-            return 1;
-        }
-
-        std::cout << "IC4 devices found: " << devices.size() << "\n";
-        for (std::size_t i = 0; i < devices.size(); ++i) {
-            PrintDevice(i, devices[i]);
-        }
-
-        const char* indexText = ArgValue(argc, argv, "--device-index");
-        const char* serialText = ArgValue(argc, argv, "--serial");
-        if (!indexText && !serialText) {
-            std::cout << "\nSpecify --device-index N or --serial SERIAL to open and probe one device.\n";
-            ic4::exitLibrary();
-            return 0;
-        }
-
-        std::optional<std::size_t> selectedIndex;
-        if (serialText) {
-            for (std::size_t i = 0; i < devices.size(); ++i) {
-                ic4::Error serialError;
-                if (devices[i].serial(serialError) == serialText && !serialError.isError()) {
-                    selectedIndex = i;
-                    break;
-                }
-            }
-            if (!selectedIndex) {
-                std::cerr << "No device with serial " << serialText << "\n";
-                ic4::exitLibrary();
-                return 1;
-            }
-        } else {
-            const int index = std::atoi(indexText);
-            if (index < 0 || static_cast<std::size_t>(index) >= devices.size()) {
-                std::cerr << "--device-index is out of range\n";
-                ic4::exitLibrary();
-                return 1;
-            }
-            selectedIndex = static_cast<std::size_t>(index);
-        }
-
-        std::cout << "\nOpening selected device index " << *selectedIndex << "\n";
-        PrintDevice(*selectedIndex, devices[*selectedIndex]);
-
-        ic4::Error grabberError;
-        ic4::Grabber grabber(grabberError);
-        if (grabberError.isError() || !grabber) {
-            std::cerr << "Grabber creation failed: " << ErrorText(grabberError) << "\n";
-            ic4::exitLibrary();
-            return 1;
-        }
-
-        if (!grabber.deviceOpen(devices[*selectedIndex], grabberError)) {
-            std::cerr << "deviceOpen failed: " << ErrorText(grabberError) << "\n";
-            ic4::exitLibrary();
-            return 1;
-        }
-        std::cout << "deviceOpen: success\n";
-
-        auto properties = grabber.devicePropertyMap(grabberError);
-        if (grabberError.isError() || !properties) {
-            std::cerr << "devicePropertyMap failed: " << ErrorText(grabberError) << "\n";
-            grabber.deviceClose(grabberError);
-            ic4::exitLibrary();
-            return 1;
-        }
-
-        bool criticalReadsSucceeded = true;
-        std::cout << "Device properties:\n";
-        PrintInteger(properties, ic4::PropId::Width, "Width", criticalReadsSucceeded);
-        PrintInteger(properties, ic4::PropId::Height, "Height", criticalReadsSucceeded);
-        PrintEnumeration(properties, ic4::PropId::PixelFormat, "PixelFormat");
-        PrintFloat(properties, ic4::PropId::AcquisitionFrameRate, "AcquisitionFrameRate");
-        PrintInteger(properties, ic4::PropId::PayloadSize, "PayloadSize", criticalReadsSucceeded, true);
-        PrintInteger(properties, ic4::PropId::DeviceStreamChannelCount, "DeviceStreamChannelCount", criticalReadsSucceeded);
-        PrintInteger(properties, ic4::PropId::DeviceStreamChannelPacketSize, "DeviceStreamChannelPacketSize", criticalReadsSucceeded);
-        PrintInteger(properties, ic4::PropId::DeviceLinkThroughputLimit, "DeviceLinkThroughputLimit", criticalReadsSucceeded);
-        PrintEnumeration(properties, ic4::PropId::DeviceLinkThroughputLimitMode, "DeviceLinkThroughputLimitMode");
-        PrintEnumeration(properties, ic4::PropId::DeviceTLType, "DeviceTLType");
-
-        if (!criticalReadsSucceeded) {
-            std::cerr << "Probe result: device is enumerated and opens, but PayloadSize cannot be read.\n";
-            resultCode = 2;
-        } else {
-            std::cout << "Probe result: core transport properties are readable.\n";
-        }
-
-        ic4::Error closeError;
-        grabber.deviceClose(closeError);
-        if (closeError.isError()) {
-            std::cerr << "deviceClose warning: " << ErrorText(closeError) << "\n";
-        }
+    ic4::Error enumError;
+    const auto devices = ic4::DeviceEnum::enumDevices(enumError);
+    if (enumError.isError()) {
+        std::cerr << "Device enumeration failed: " << ErrorText(enumError) << "\n";
+        return 1;
     }
 
-    ic4::exitLibrary();
-    return resultCode;
+    std::cout << "IC4 devices found: " << devices.size() << "\n";
+    for (std::size_t i = 0; i < devices.size(); ++i) {
+        PrintDevice(i, devices[i]);
+    }
+
+    const char* indexText = ArgValue(argc, argv, "--device-index");
+    const char* serialText = ArgValue(argc, argv, "--serial");
+    if (!indexText && !serialText) {
+        std::cout << "\nSpecify --device-index N or --serial SERIAL to open and probe one device.\n";
+        return 0;
+    }
+
+    std::optional<std::size_t> selectedIndex;
+    if (serialText) {
+        for (std::size_t i = 0; i < devices.size(); ++i) {
+            ic4::Error serialError;
+            if (devices[i].serial(serialError) == serialText && !serialError.isError()) {
+                selectedIndex = i;
+                break;
+            }
+        }
+        if (!selectedIndex) {
+            std::cerr << "No device with serial " << serialText << "\n";
+            return 1;
+        }
+    } else {
+        const int index = std::atoi(indexText);
+        if (index < 0 || static_cast<std::size_t>(index) >= devices.size()) {
+            std::cerr << "--device-index is out of range\n";
+            return 1;
+        }
+        selectedIndex = static_cast<std::size_t>(index);
+    }
+
+    std::cout << "\nOpening selected device index " << *selectedIndex << "\n";
+    PrintDevice(*selectedIndex, devices[*selectedIndex]);
+
+    ic4::Error grabberError;
+    ic4::Grabber grabber(grabberError);
+    if (grabberError.isError() || !grabber) {
+        std::cerr << "Grabber creation failed: " << ErrorText(grabberError) << "\n";
+        return 1;
+    }
+
+    if (!grabber.deviceOpen(devices[*selectedIndex], grabberError)) {
+        std::cerr << "deviceOpen failed: " << ErrorText(grabberError) << "\n";
+        return 1;
+    }
+    std::cout << "deviceOpen: success\n";
+
+    auto properties = grabber.devicePropertyMap(grabberError);
+    if (grabberError.isError() || !properties) {
+        std::cerr << "devicePropertyMap failed: " << ErrorText(grabberError) << "\n";
+        return 1;
+    }
+
+    bool criticalReadsSucceeded = true;
+    std::cout << "Device properties:\n";
+    PrintInteger(properties, ic4::PropId::Width, "Width", criticalReadsSucceeded);
+    PrintInteger(properties, ic4::PropId::Height, "Height", criticalReadsSucceeded);
+    PrintEnumeration(properties, ic4::PropId::PixelFormat, "PixelFormat");
+    PrintFloat(properties, ic4::PropId::AcquisitionFrameRate, "AcquisitionFrameRate");
+    PrintInteger(properties, ic4::PropId::PayloadSize, "PayloadSize", criticalReadsSucceeded, true);
+    PrintInteger(properties, ic4::PropId::DeviceStreamChannelCount, "DeviceStreamChannelCount", criticalReadsSucceeded);
+    PrintInteger(properties, ic4::PropId::DeviceStreamChannelPacketSize, "DeviceStreamChannelPacketSize", criticalReadsSucceeded);
+    PrintInteger(properties, ic4::PropId::DeviceLinkThroughputLimit, "DeviceLinkThroughputLimit", criticalReadsSucceeded);
+    PrintEnumeration(properties, ic4::PropId::DeviceLinkThroughputLimitMode, "DeviceLinkThroughputLimitMode");
+    PrintEnumeration(properties, ic4::PropId::DeviceTLType, "DeviceTLType");
+
+    if (!criticalReadsSucceeded) {
+        std::cerr << "Probe result: device is enumerated and opens, but PayloadSize cannot be read.\n";
+        return 2;
+    }
+
+    std::cout << "Probe result: core transport properties are readable.\n";
+    return 0;
 }
