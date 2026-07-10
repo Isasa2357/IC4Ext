@@ -32,6 +32,7 @@ if(IC4EXT_ENABLE_D3D11)
     set_tests_properties(test_d3d11_frame_readback PROPERTIES SKIP_RETURN_CODE 77)
 
     ic4ext_add_no_camera_test(test_d3d11_dummy_camera_capture test_d3d11_dummy_camera_capture.cpp)
+    ic4ext_add_no_camera_test(test_d3d11_camera_capture_thread_outputs test_d3d11_camera_capture_thread_outputs.cpp)
     ic4ext_add_no_camera_test(test_d3d11_frame_sync_thread test_d3d11_frame_sync_thread.cpp)
 endif()
 
@@ -52,6 +53,7 @@ if(IC4EXT_ENABLE_D3D12)
     target_compile_definitions(test_d3d12_shader_reference PRIVATE IC4EXT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/..")
 
     ic4ext_add_no_camera_test(test_d3d12_dummy_camera_capture test_d3d12_dummy_camera_capture.cpp)
+    ic4ext_add_no_camera_test(test_d3d12_camera_capture_thread_outputs test_d3d12_camera_capture_thread_outputs.cpp)
 
     ic4ext_add_no_camera_test(test_d3d12_frame_readback test_d3d12_frame_readback.cpp)
     set_tests_properties(test_d3d12_frame_readback PROPERTIES SKIP_RETURN_CODE 77)
