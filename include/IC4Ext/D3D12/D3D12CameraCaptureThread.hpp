@@ -61,6 +61,10 @@ public:
     bool setIC4Property(const std::string& propertyName, const char* value);
     bool setIC4Property(const std::string& propertyName, const std::string& value);
 
+    // Typed public lifecycle API. The implementation intentionally uses the IC4
+    // command properties because this is the path validated with two DFK 33UX252
+    // cameras. Direct Grabber::acquisitionStart()/Stop() remains available inside
+    // D3D*CameraCapture but is not used by the production multi-camera path.
     bool startAcquisition()
     {
         std::lock_guard<std::mutex> sourceLock(sourceMutex_);
@@ -71,12 +75,9 @@ public:
             return false;
         }
 
-        bool ok = false;
-        if (auto* capture = dynamic_cast<D3D12CameraCapture*>(source_.get())) {
-            ok = capture->startAcquisition();
-        } else {
-            ok = source_->setIC4Property("AcquisitionStart", std::string("execute"));
-        }
+        const bool ok = source_->setIC4Property(
+            "AcquisitionStart",
+            std::string("execute"));
         lastError_ = ok ? NoError() : source_->lastError();
         return ok;
     }
@@ -91,12 +92,9 @@ public:
             return false;
         }
 
-        bool ok = false;
-        if (auto* capture = dynamic_cast<D3D12CameraCapture*>(source_.get())) {
-            ok = capture->stopAcquisition();
-        } else {
-            ok = source_->setIC4Property("AcquisitionStop", std::string("execute"));
-        }
+        const bool ok = source_->setIC4Property(
+            "AcquisitionStop",
+            std::string("execute"));
         lastError_ = ok ? NoError() : source_->lastError();
         return ok;
     }
@@ -139,7 +137,8 @@ public:
                      "Source is not opened");
             return false;
         }
-        const bool ok = source_->softwareTrigger(commandName.empty() ? std::string("TriggerSoftware") : commandName);
+        const bool ok = source_->softwareTrigger(
+            commandName.empty() ? std::string("TriggerSoftware") : commandName);
         lastError_ = ok ? NoError() : source_->lastError();
         return ok;
     }
