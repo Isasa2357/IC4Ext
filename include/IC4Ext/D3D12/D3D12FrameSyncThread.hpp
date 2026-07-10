@@ -63,7 +63,8 @@ private:
     void incrementEmittedOrPushFailure(ThreadKit::Queues::QueuePushResult result);
     void setError(ErrorCode code, const char* where, const std::string& message);
 
-    static std::uint64_t SyncTimestampNs(const D3D12IndexedCameraFrame& frame) noexcept;
+    std::uint64_t syncTimestampNs(const D3D12IndexedCameraFrame& frame) const noexcept;
+    static std::uint64_t hostTimestampNs(const D3D12IndexedCameraFrame& frame) noexcept;
 
     std::shared_ptr<D3D12IndexedFrameQueue> inputQueue_;
     std::shared_ptr<D3D12SyncedFrameQueue> outputQueue_;
