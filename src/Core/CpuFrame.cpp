@@ -70,6 +70,7 @@ bool ResizeOutput(std::uint32_t width,
     out.format = dstFormat;
     out.rowPitch = TightRowPitch(width, dstFormat);
     out.timing = timing;
+    out.chunkMetadata = {};
     out.data.assign(static_cast<std::size_t>(size), 0);
     return true;
 }
