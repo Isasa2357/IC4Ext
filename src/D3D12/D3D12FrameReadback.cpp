@@ -1,5 +1,7 @@
 #include "IC4Ext/D3D12/D3D12FrameReadback.hpp"
 
+#include <D3D12Helper/D3D12Core/D3D12Barrier.hpp>
+
 #include <algorithm>
 #include <sstream>
 #include <stdexcept>
@@ -28,19 +30,6 @@ bool DxgiToGpuFrameFormat(DXGI_FORMAT dxgi, GpuFrameFormat& out) noexcept
     default:
         return false;
     }
-}
-
-D3D12_RESOURCE_BARRIER TransitionBarrier(ID3D12Resource* resource,
-                                         D3D12_RESOURCE_STATES before,
-                                         D3D12_RESOURCE_STATES after)
-{
-    D3D12_RESOURCE_BARRIER barrier = {};
-    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier.Transition.pResource = resource;
-    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    barrier.Transition.StateBefore = before;
-    barrier.Transition.StateAfter = after;
-    return barrier;
 }
 
 } // namespace
@@ -136,7 +125,7 @@ bool D3D12FrameReadback::readback(const D3D12CameraFrame& frame,
 
         const D3D12_RESOURCE_STATES originalState = frame.resourceState;
         if (originalState != D3D12_RESOURCE_STATE_COPY_SOURCE) {
-            auto toCopy = TransitionBarrier(frame.texture.Get(), originalState, D3D12_RESOURCE_STATE_COPY_SOURCE);
+            auto toCopy = D3D12CoreLib::MakeTransitionBarrier(frame.texture.Get(), originalState, D3D12_RESOURCE_STATE_COPY_SOURCE);
             commandContext_.ResourceBarrier(toCopy);
         }
 
@@ -153,7 +142,7 @@ bool D3D12FrameReadback::readback(const D3D12CameraFrame& frame,
         cmd->CopyTextureRegion(&dstLocation, 0, 0, 0, &srcLocation, nullptr);
 
         if (originalState != D3D12_RESOURCE_STATE_COPY_SOURCE) {
-            auto back = TransitionBarrier(frame.texture.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, originalState);
+            auto back = D3D12CoreLib::MakeTransitionBarrier(frame.texture.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, originalState);
             commandContext_.ResourceBarrier(back);
         }
 
