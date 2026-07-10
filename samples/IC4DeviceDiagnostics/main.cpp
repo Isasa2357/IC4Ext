@@ -1,9 +1,12 @@
 #include <ic4/ic4.h>
 
+#include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <iostream>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -35,6 +38,14 @@ const char* ArgValue(int argc, char** argv, const char* name)
         if (std::string(argv[i]) == name) return argv[i + 1];
     }
     return nullptr;
+}
+
+bool HasFlag(int argc, char** argv, const char* name)
+{
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == name) return true;
+    }
+    return false;
 }
 
 std::string ErrorText(const ic4::Error& err)
@@ -177,6 +188,83 @@ void PrintEnumeration(ic4::PropertyMap& properties,
     std::cout << "  " << name << " : " << value << "\n";
 }
 
+bool LoadDefaultUserSet(ic4::Grabber& grabber)
+{
+    ic4::Error mapError;
+    auto properties = grabber.devicePropertyMap(mapError);
+    if (mapError.isError() || !properties) {
+        std::cerr << "Default UserSet: devicePropertyMap failed: " << ErrorText(mapError) << "\n";
+        return false;
+    }
+
+    ic4::Error selectorError;
+    if (!properties.setValue(ic4::PropId::UserSetSelector, "Default", selectorError)) {
+        std::cerr << "Default UserSet: UserSetSelector=Default failed: "
+                  << ErrorText(selectorError) << "\n";
+        return false;
+    }
+
+    ic4::Error loadError;
+    if (!properties.executeCommand(ic4::PropId::UserSetLoad, loadError)) {
+        std::cerr << "Default UserSet: UserSetLoad failed: " << ErrorText(loadError) << "\n";
+        return false;
+    }
+
+    std::cout << "Default UserSet: loaded successfully\n";
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    return true;
+}
+
+bool ProbeStream(ic4::Grabber& grabber, int waitMs)
+{
+    std::atomic<std::uint64_t> frameCount{0};
+
+    ic4::Error sinkError;
+    auto sink = ic4::QueueSink::create(
+        [&frameCount](ic4::QueueSink& queueSink) {
+            for (;;) {
+                ic4::Error popError;
+                auto buffer = queueSink.popOutputBuffer(popError);
+                if (popError.isError() || !buffer) break;
+                ++frameCount;
+            }
+        },
+        sinkError);
+
+    if (sinkError.isError() || !sink) {
+        std::cerr << "Official-style stream probe: QueueSink::create failed: "
+                  << ErrorText(sinkError) << "\n";
+        return false;
+    }
+
+    ic4::Error setupError;
+    if (!grabber.streamSetup(sink, ic4::StreamSetupOption::AcquisitionStart, setupError)) {
+        std::cerr << "Official-style stream probe: streamSetup failed: "
+                  << ErrorText(setupError) << "\n";
+        return false;
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(waitMs);
+    while (frameCount.load() == 0 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    ic4::Error stopError;
+    grabber.streamStop(stopError);
+    if (stopError.isError()) {
+        std::cerr << "Official-style stream probe: streamStop warning: "
+                  << ErrorText(stopError) << "\n";
+    }
+
+    std::cout << "Official-style stream probe: framesReceived=" << frameCount.load() << "\n";
+    if (frameCount.load() == 0) {
+        std::cerr << "Official-style stream probe: stream opened but no frame arrived within "
+                  << waitMs << " ms\n";
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -201,6 +289,13 @@ int main(int argc, char** argv)
 
     const char* indexText = ArgValue(argc, argv, "--device-index");
     const char* serialText = ArgValue(argc, argv, "--serial");
+    const bool loadDefaultUserSet = HasFlag(argc, argv, "--load-default-userset");
+    const bool probeStream = HasFlag(argc, argv, "--probe-stream");
+    int streamWaitMs = 3000;
+    if (const char* value = ArgValue(argc, argv, "--stream-wait-ms")) {
+        streamWaitMs = std::max(1, std::atoi(value));
+    }
+
     if (!indexText && !serialText) {
         std::cout << "\nSpecify --device-index N or --serial SERIAL to open and probe one device.\n";
         return 0;
@@ -244,6 +339,10 @@ int main(int argc, char** argv)
     }
     std::cout << "deviceOpen: success\n";
 
+    if (loadDefaultUserSet && !LoadDefaultUserSet(grabber)) {
+        return 3;
+    }
+
     auto properties = grabber.devicePropertyMap(grabberError);
     if (grabberError.isError() || !properties) {
         std::cerr << "devicePropertyMap failed: " << ErrorText(grabberError) << "\n";
@@ -263,11 +362,22 @@ int main(int argc, char** argv)
     PrintEnumeration(properties, ic4::PropId::DeviceLinkThroughputLimitMode, "DeviceLinkThroughputLimitMode");
     PrintEnumeration(properties, ic4::PropId::DeviceTLType, "DeviceTLType");
 
+    bool streamSucceeded = true;
+    if (probeStream) {
+        streamSucceeded = ProbeStream(grabber, streamWaitMs);
+    }
+
     if (!criticalReadsSucceeded) {
         std::cerr << "Probe result: device is enumerated and opens, but PayloadSize cannot be read.\n";
         return 2;
     }
+    if (!streamSucceeded) {
+        std::cerr << "Probe result: core properties are readable, but official-style stream acquisition failed.\n";
+        return 4;
+    }
 
-    std::cout << "Probe result: core transport properties are readable.\n";
+    std::cout << "Probe result: core transport properties are readable";
+    if (probeStream) std::cout << " and official-style stream acquisition succeeded";
+    std::cout << ".\n";
     return 0;
 }
