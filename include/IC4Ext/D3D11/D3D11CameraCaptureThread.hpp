@@ -60,6 +60,46 @@ public:
     bool setIC4Property(const std::string& propertyName, const char* value);
     bool setIC4Property(const std::string& propertyName, const std::string& value);
 
+    bool startAcquisition()
+    {
+        std::lock_guard<std::mutex> sourceLock(sourceMutex_);
+        if (!source_ || !source_->isOpened()) {
+            setError(ErrorCode::NotOpened,
+                     "D3D11CameraCaptureThread::startAcquisition",
+                     "Source is not opened");
+            return false;
+        }
+        const bool ok = source_->startAcquisition();
+        lastError_ = ok ? NoError() : source_->lastError();
+        return ok;
+    }
+
+    bool stopAcquisition()
+    {
+        std::lock_guard<std::mutex> sourceLock(sourceMutex_);
+        if (!source_ || !source_->isOpened()) {
+            setError(ErrorCode::NotOpened,
+                     "D3D11CameraCaptureThread::stopAcquisition",
+                     "Source is not opened");
+            return false;
+        }
+        const bool ok = source_->stopAcquisition();
+        lastError_ = ok ? NoError() : source_->lastError();
+        return ok;
+    }
+
+    bool isStreaming() const noexcept
+    {
+        std::lock_guard<std::mutex> sourceLock(sourceMutex_);
+        return source_ && source_->isStreaming();
+    }
+
+    bool isAcquisitionActive() const noexcept
+    {
+        std::lock_guard<std::mutex> sourceLock(sourceMutex_);
+        return source_ && source_->isAcquisitionActive();
+    }
+
     bool setFrameRate(double fps);
     bool setExposureAuto(const std::string& mode);
     bool setExposureTime(double exposureTimeUs);
