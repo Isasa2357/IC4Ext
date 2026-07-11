@@ -45,10 +45,10 @@ set(D3D11HELPER_ROOT "" CACHE PATH "Optional local path to D3D11Helper. Override
 set(D3D12HELPER_ROOT "" CACHE PATH "Optional local path to D3D12Helper. Overrides FetchContent when set.")
 set(THREADKIT_ROOT "" CACHE PATH "Optional local path to ThreadKit. Overrides FetchContent when set.")
 
-# Pin helper dependencies by tag. D3D11Helper/D3D12Helper CMake project versions may lag the tag name,
-# so the Git ref is the authoritative version selector for IC4Ext.
-set(IC4EXT_D3D11HELPER_GIT_TAG "v1.12.1" CACHE STRING "Git tag/branch/commit for D3D11Helper FetchContent")
-set(IC4EXT_D3D12HELPER_GIT_TAG "v1.12.1" CACHE STRING "Git tag/branch/commit for D3D12Helper FetchContent")
+# Pin helper dependencies by tag. Output-queue resize uses the v1.13 non-owning
+# resource-view Processing APIs.
+set(IC4EXT_D3D11HELPER_GIT_TAG "v1.13.0" CACHE STRING "Git tag/branch/commit for D3D11Helper FetchContent")
+set(IC4EXT_D3D12HELPER_GIT_TAG "v1.13.0" CACHE STRING "Git tag/branch/commit for D3D12Helper FetchContent")
 set(IC4EXT_THREADKIT_GIT_TAG "main" CACHE STRING "Git tag/branch/commit for ThreadKit FetchContent")
 set(IC4EXT_NLOHMANN_JSON_GIT_TAG "v3.11.3" CACHE STRING "Git tag/branch/commit for nlohmann/json FetchContent")
 
@@ -247,6 +247,7 @@ if(IC4EXT_ENABLE_D3D11)
         src/D3D11/D3D11FenceManager.cpp
         src/D3D11/D3D11FrameConverter.cpp
         src/D3D11/D3D11FrameCopier.cpp
+        src/D3D11/D3D11FrameResizer.cpp
         src/D3D11/D3D11FrameReadback.cpp
         src/D3D11/D3D11DummyCameraCapture.cpp
         src/D3D11/D3D11DummyCameraCaptureGenerator.cpp
@@ -262,6 +263,7 @@ if(IC4EXT_ENABLE_D3D12)
         src/D3D12/D3D12FenceManager.cpp
         src/D3D12/D3D12FrameConverter.cpp
         src/D3D12/D3D12FrameCopier.cpp
+        src/D3D12/D3D12FrameResizer.cpp
         src/D3D12/D3D12FrameReadback.cpp
         src/D3D12/D3D12DummyCameraCapture.cpp
         src/D3D12/D3D12DummyCameraCaptureGenerator.cpp
@@ -371,6 +373,16 @@ endif()
 
 set(IC4EXT_SHADER_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shaders/d3d11" CACHE PATH "IC4Ext D3D11 shader source directory")
 file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/shaders" DESTINATION "${CMAKE_BINARY_DIR}")
+
+# The per-output resizers use helper Processing shaders at runtime.
+if(IC4EXT_D3D11HELPER_SOURCE_DIR AND EXISTS "${IC4EXT_D3D11HELPER_SOURCE_DIR}/shaders/D3D11Processing")
+    file(COPY "${IC4EXT_D3D11HELPER_SOURCE_DIR}/shaders/D3D11Processing"
+         DESTINATION "${CMAKE_BINARY_DIR}/shaders")
+endif()
+if(IC4EXT_D3D12HELPER_SOURCE_DIR AND EXISTS "${IC4EXT_D3D12HELPER_SOURCE_DIR}/shaders/D3D12Processing")
+    file(COPY "${IC4EXT_D3D12HELPER_SOURCE_DIR}/shaders/D3D12Processing"
+         DESTINATION "${CMAKE_BINARY_DIR}/shaders")
+endif()
 
 if(IC4EXT_BUILD_SAMPLES)
     if(IC4EXT_ENABLE_D3D11)
