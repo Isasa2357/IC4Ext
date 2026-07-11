@@ -20,7 +20,7 @@ public:
                     D3D11FenceManager* fenceManager,
                     const std::filesystem::path& shaderDirectory);
 
-    bool resizeFrame(const D3D11CameraFrame& src,
+    bool resizeFrame(D3D11CameraFrame& src,
                      const CameraOutputResizeOptions& options,
                      D3D11CameraFrame& dst);
 
