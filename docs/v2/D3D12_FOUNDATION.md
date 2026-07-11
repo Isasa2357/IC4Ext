@@ -13,6 +13,11 @@ This branch introduces the v2 D3D12 API alongside the existing v1 API so that th
   - bounded dynamic growth
   - `DropNewest` and timed-wait exhaustion policies
   - move-only writable lease and one-way `publish()` transition
+- `IC4Ext::V2::D3D12PooledFrameConverter`
+  - reuses the v1 converter shader pipelines, upload rings and command slots
+  - writes directly into a frame-pool lease
+  - copies the pool UAV descriptor into the converter's per-slot descriptor heap
+  - publishes the completed texture as a read-only frame after queue signaling
 - `IC4Ext::V2::D3D12ReadOnlyFrameSet`
   - immutable selected-camera frame set
 - `IC4Ext::V2::D3D12FrameSyncThread`
@@ -36,12 +41,12 @@ The existing v1 D3D11 and D3D12 APIs remain compiled during the migration. New c
 
 ## Next D3D12 implementation steps
 
-1. Change `D3D12FrameConverter` to record into `D3D12FrameWriter` resources instead of allocating a new output texture every frame.
-2. Make `D3D12CameraCapture` own and configure `D3D12FramePool`.
-3. Return `D3D12ReadOnlyFrame` from the v2 capture interface.
-4. Replace CameraCaptureThread physical-copy fan-out with shared read-only handle delivery.
-5. Add a real D3D12 device pool test and dummy-camera synchronization tests.
-6. Add consumer-side GPU lifetime retention helpers.
+1. Make `D3D12CameraCapture` own and lazily configure `D3D12FramePool` from the negotiated frame shape.
+2. Add the v2 capture read result returning `D3D12ReadOnlyFrame`.
+3. Replace CameraCaptureThread physical-copy fan-out with shared read-only handle delivery.
+4. Add a real D3D12 device pool/converter test and dummy-camera synchronization tests.
+5. Add consumer-side GPU lifetime retention helpers.
+6. Remove the v1 physical-copy fan-out path after migration samples are complete.
 
 ## Resource-state contract
 
