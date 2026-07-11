@@ -1,0 +1,580 @@
+name: Apply per-output resize implementation
+
+on:
+  push:
+    branches:
+      - agent/per-output-resize
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/per-output-resize
+          fetch-depth: 0
+
+      - name: Apply implementation
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8-sig')
+              if old not in text:
+                  raise SystemExit(f'pattern not found in {path}: {old[:80]!r}')
+              p.write_text(text.replace(old, new), encoding='utf-8', newline='\n')
+
+          replace('include/IC4Ext/Config.hpp',
+          '''struct CameraThreadOptions
+          {
+              std::uint32_t readTimeoutMs = 1000;
+              bool copyPerOutputQueue = true;
+              bool stopOnReadError = false;
+          };''',
+          '''struct CameraThreadOptions
+          {
+              std::uint32_t readTimeoutMs = 1000;
+              bool copyPerOutputQueue = true;
+              bool stopOnReadError = false;
+          };
+
+          struct CameraOutputQueueOptions
+          {
+              // width == 0 and height == 0 keep the original frame size.
+              // When resizing is enabled, both values must be greater than zero.
+              int width = 0;
+              int height = 0;
+
+              bool resizeEnabled() const noexcept { return width > 0 && height > 0; }
+              bool valid() const noexcept
+              {
+                  return (width == 0 && height == 0) || (width > 0 && height > 0);
+              }
+          };''')
+
+          replace('include/IC4Ext/Core/CoreTypes.hpp',
+          '''    std::uint64_t copiedFrames = 0;
+              std::uint64_t copyFailures = 0;
+              std::uint64_t noOutputDrops = 0;''',
+          '''    std::uint64_t copiedFrames = 0;
+              std::uint64_t copyFailures = 0;
+              std::uint64_t resizedFrames = 0;
+              std::uint64_t resizeFailures = 0;
+              std::uint64_t noOutputDrops = 0;''')
+
+          for backend in ('D3D11', 'D3D12'):
+              header = f'include/IC4Ext/{backend}/{backend}CameraCaptureThread.hpp'
+              queue = f'{backend}IndexedFrameQueue'
+              frame = f'{backend}CameraFrame'
+              resizer = f'{backend}FrameResizer'
+              replace(header,
+              f'''#include "IC4Ext/{backend}/{backend}FrameCopier.hpp"''',
+              f'''#include "IC4Ext/{backend}/{backend}FrameCopier.hpp"\n#include "IC4Ext/{backend}/{backend}FrameResizer.hpp"''')
+              replace(header,
+              f'''    void addOutputQueue(std::uint32_t cameraIndex,
+                                  std::shared_ptr<{queue}> queue);''',
+              f'''    void addOutputQueue(std::uint32_t cameraIndex,
+                                  std::shared_ptr<{queue}> queue);
+              void addOutputQueue(std::uint32_t cameraIndex,
+                                  std::shared_ptr<{queue}> queue,
+                                  CameraOutputQueueOptions options);''')
+              replace(header,
+              f'''        std::uint32_t cameraIndex = 0;
+                  std::shared_ptr<{queue}> queue;''',
+              f'''        std::uint32_t cameraIndex = 0;
+                  std::shared_ptr<{queue}> queue;
+                  CameraOutputQueueOptions options;''')
+              replace(header,
+              f'''    {resizer.replace('Resizer','Copier')} copier_;''',
+              f'''    {resizer.replace('Resizer','Copier')} copier_;
+              {resizer} resizer_;''')
+
+          Path('include/IC4Ext/D3D11/D3D11FrameResizer.hpp').write_text(r'''#pragma once
+
+#include "IC4Ext/Core/Error.hpp"
+#include "IC4Ext/D3D11/D3D11CameraFrame.hpp"
+#include "IC4Ext/D3D11/D3D11FenceManager.hpp"
+
+#include <D3D11Helper/D3D11Processing/D3D11Processing.hpp>
+
+namespace IC4Ext {
+
+class D3D11FrameResizer
+{
+public:
+    bool initialize(D3D11CoreLib::D3D11Core* core, D3D11FenceManager* fenceManager);
+    bool resizeFrame(const D3D11CameraFrame& src, int width, int height, D3D11CameraFrame& dst);
+    const ErrorInfo& lastError() const noexcept { return lastError_; }
+
+private:
+    void setError(ErrorCode code, const char* where, const std::string& message);
+
+    D3D11CoreLib::D3D11Core* core_ = nullptr;
+    D3D11FenceManager* fenceManager_ = nullptr;
+    D3D11CoreLib::Processing::D3D11ProcessingContext processingContext_;
+    D3D11CoreLib::Processing::D3D11Resizer resizer_;
+    ErrorInfo lastError_;
+};
+
+} // namespace IC4Ext
+''', encoding='utf-8', newline='\n')
+
+          Path('src/D3D11/D3D11FrameResizer.cpp').write_text(r'''#include "IC4Ext/D3D11/D3D11FrameResizer.hpp"
+
+#include <exception>
+
+namespace IC4Ext {
+
+void D3D11FrameResizer::setError(ErrorCode code, const char* where, const std::string& message)
+{
+    lastError_ = MakeError(code, where, message);
+}
+
+bool D3D11FrameResizer::initialize(D3D11CoreLib::D3D11Core* core, D3D11FenceManager* fenceManager)
+{
+    lastError_ = NoError();
+    if (!core || !fenceManager) {
+        setError(ErrorCode::InvalidArgument, "D3D11FrameResizer::initialize", "core/fence manager is null");
+        return false;
+    }
+    try {
+        core_ = core;
+        fenceManager_ = fenceManager;
+        processingContext_.Initialize(*core_);
+        resizer_.Initialize(processingContext_);
+        return true;
+    } catch (const std::exception& e) {
+        setError(ErrorCode::D3D11Error, "D3D11FrameResizer::initialize", e.what());
+        return false;
+    }
+}
+
+bool D3D11FrameResizer::resizeFrame(const D3D11CameraFrame& src, int width, int height, D3D11CameraFrame& dst)
+{
+    lastError_ = NoError();
+    dst = {};
+    if (!core_ || !fenceManager_ || !src.texture || width <= 0 || height <= 0) {
+        setError(ErrorCode::InvalidArgument, "D3D11FrameResizer::resizeFrame", "invalid source or output size");
+        return false;
+    }
+    try {
+        if (src.ready.isValid()) src.ready.wait(INFINITE);
+        const auto srcDesc = src.texture->GetDesc();
+        auto output = resizer_.CreateOutputTexture(*core_, static_cast<UINT>(width), static_cast<UINT>(height), srcDesc.Format);
+        auto srcViews = D3D11CoreLib::Processing::CreateRgbaTextureViewSetView(
+            processingContext_, D3D11CoreLib::D3D11ResourceView(src.texture.Get()), true, false, srcDesc.Format);
+        auto dstViews = D3D11CoreLib::Processing::CreateRgbaTextureViewSet(
+            processingContext_, output, true, true, srcDesc.Format);
+
+        D3D11CoreLib::Processing::ResizeDesc desc;
+        desc.srcRect = {0, 0, static_cast<UINT>(src.format.width), static_cast<UINT>(src.format.height)};
+        desc.dstRect = {0, 0, static_cast<UINT>(width), static_cast<UINT>(height)};
+        resizer_.DispatchResizeView(
+            core_->GetImmediateContext(),
+            D3D11CoreLib::D3D11ResourceView(src.texture.Get()),
+            D3D11CoreLib::D3D11ResourceView(output.Get()),
+            desc);
+
+        dst.texture = output.AsTexture2D();
+        dst.srv = dstViews.srv;
+        dst.uav = dstViews.uav;
+        dst.ready = fenceManager_->signal();
+        if (!dst.ready.isValid()) {
+            setError(ErrorCode::D3D11Error, "D3D11FrameResizer::resizeFrame", fenceManager_->lastError().message);
+            return false;
+        }
+        dst.timing = src.timing;
+        dst.format = src.format;
+        dst.format.width = width;
+        dst.format.height = height;
+        dst.chunkMetadata = src.chunkMetadata;
+        return true;
+    } catch (const std::exception& e) {
+        setError(ErrorCode::D3D11Error, "D3D11FrameResizer::resizeFrame", e.what());
+        return false;
+    }
+}
+
+} // namespace IC4Ext
+''', encoding='utf-8', newline='\n')
+
+          Path('include/IC4Ext/D3D12/D3D12FrameResizer.hpp').write_text(r'''#pragma once
+
+#include "IC4Ext/Core/Error.hpp"
+#include "IC4Ext/D3D12/D3D12BackendContext.hpp"
+#include "IC4Ext/D3D12/D3D12CameraFrame.hpp"
+#include "IC4Ext/D3D12/D3D12FenceManager.hpp"
+
+#include <D3D12Helper/D3D12Processing/D3D12Processing.hpp>
+
+#include <array>
+
+namespace IC4Ext {
+
+class D3D12FrameResizer
+{
+public:
+    bool initialize(const D3D12BackendContext& backend, D3D12FenceManager* fenceManager);
+    bool resizeFrame(const D3D12CameraFrame& src, int width, int height, D3D12CameraFrame& dst);
+    const ErrorInfo& lastError() const noexcept { return lastError_; }
+
+private:
+    struct Slot
+    {
+        D3D12CoreLib::D3D12DescriptorAllocator cbvSrvUav;
+        D3D12CoreLib::D3D12DescriptorAllocator sampler;
+        D3D12CoreLib::Processing::D3D12ProcessingContext processingContext;
+        D3D12CoreLib::Processing::D3D12Resizer resizer;
+        D3D12CoreLib::D3D12CommandContext commandContext;
+        D3D12ReadyToken inFlight;
+    };
+
+    Slot& acquireSlot();
+    bool createSrv(D3D12CameraFrame& frame);
+    void setError(ErrorCode code, const char* where, const std::string& message);
+
+    D3D12BackendContext backend_;
+    D3D12CoreLib::D3D12Core* core_ = nullptr;
+    D3D12CoreLib::D3D12Queue* queue_ = nullptr;
+    ID3D12Device* device_ = nullptr;
+    D3D12FenceManager* fenceManager_ = nullptr;
+    std::array<Slot, 4> slots_{};
+    std::size_t nextSlot_ = 0;
+    ErrorInfo lastError_;
+};
+
+} // namespace IC4Ext
+''', encoding='utf-8', newline='\n')
+
+          Path('src/D3D12/D3D12FrameResizer.cpp').write_text(r'''#include "IC4Ext/D3D12/D3D12FrameResizer.hpp"
+
+#include <D3D12Helper/D3D12Framework/D3D12Helpers.hpp>
+
+#include <exception>
+
+namespace IC4Ext {
+
+void D3D12FrameResizer::setError(ErrorCode code, const char* where, const std::string& message)
+{
+    lastError_ = MakeError(code, where, message);
+}
+
+bool D3D12FrameResizer::initialize(const D3D12BackendContext& backend, D3D12FenceManager* fenceManager)
+{
+    lastError_ = NoError();
+    backend_ = backend;
+    if (!backend_.resolve() || !backend_.corePtr || !backend_.queue || !fenceManager) {
+        setError(ErrorCode::InvalidArgument, "D3D12FrameResizer::initialize", "helper-backed backend/fence manager is required");
+        return false;
+    }
+    try {
+        core_ = backend_.corePtr;
+        queue_ = backend_.queue;
+        device_ = backend_.device;
+        fenceManager_ = fenceManager;
+        for (auto& slot : slots_) {
+            slot.cbvSrvUav.Initialize(device_, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 64, true);
+            slot.sampler.Initialize(device_, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, 8, true);
+            slot.processingContext.Initialize(*core_, &slot.cbvSrvUav, &slot.sampler);
+            slot.resizer.Initialize(slot.processingContext);
+            slot.commandContext.Initialize(device_, queue_->GetType());
+        }
+        return true;
+    } catch (const std::exception& e) {
+        setError(ErrorCode::D3D12Error, "D3D12FrameResizer::initialize", e.what());
+        return false;
+    }
+}
+
+D3D12FrameResizer::Slot& D3D12FrameResizer::acquireSlot()
+{
+    auto& slot = slots_[nextSlot_++ % slots_.size()];
+    if (slot.inFlight.isValid()) slot.inFlight.wait(INFINITE);
+    slot.inFlight = {};
+    slot.cbvSrvUav.Reset();
+    slot.sampler.Reset();
+    slot.commandContext.Reset();
+    return slot;
+}
+
+bool D3D12FrameResizer::createSrv(D3D12CameraFrame& frame)
+{
+    frame.srvHeapHelper.Initialize(device_, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 1, true);
+    frame.srvHeap = frame.srvHeapHelper.Get();
+    auto handle = frame.srvHeapHelper.GetHandle(0);
+    D3D12CoreLib::CreateTexture2DSrv(*core_, frame.textureResource, handle.cpu, frame.dxgiFormat);
+    frame.srvCpuHandle = handle.cpu;
+    frame.srvGpuHandle = handle.gpu;
+    return true;
+}
+
+bool D3D12FrameResizer::resizeFrame(const D3D12CameraFrame& src, int width, int height, D3D12CameraFrame& dst)
+{
+    lastError_ = NoError();
+    dst = {};
+    if (!core_ || !queue_ || !src.texture || width <= 0 || height <= 0) {
+        setError(ErrorCode::InvalidArgument, "D3D12FrameResizer::resizeFrame", "invalid source or output size");
+        return false;
+    }
+    try {
+        if (src.ready.isValid()) src.ready.wait(INFINITE);
+        auto& slot = acquireSlot();
+        const auto srcDesc = src.texture->GetDesc();
+        dst.textureResource = slot.resizer.CreateOutputTexture(
+            *core_, static_cast<UINT>(width), static_cast<UINT>(height), srcDesc.Format,
+            D3D12_RESOURCE_STATE_COMMON);
+        dst.texture = dst.textureResource.Get();
+
+        D3D12CoreLib::Processing::ResizeDesc desc;
+        desc.srcRect = {0, 0, static_cast<UINT>(src.format.width), static_cast<UINT>(src.format.height)};
+        desc.dstRect = {0, 0, static_cast<UINT>(width), static_cast<UINT>(height)};
+        D3D12CoreLib::Processing::D3D12ProcessingStateDesc states;
+        states.srcBefore = src.resourceState;
+        states.srcAfter = src.resourceState;
+        states.dstBefore = D3D12_RESOURCE_STATE_COMMON;
+        states.dstAfter = D3D12_RESOURCE_STATE_COMMON;
+        states.useExplicitStates = true;
+        slot.resizer.RecordResizeView(
+            slot.commandContext,
+            D3D12CoreLib::D3D12ResourceView(src.texture.Get()),
+            D3D12CoreLib::D3D12ResourceView(dst.texture.Get()),
+            desc,
+            states);
+
+        slot.commandContext.Close();
+        ID3D12CommandList* lists[] = {slot.commandContext.GetCommandList()};
+        queue_->ExecuteCommandLists(1, lists);
+        const auto fenceValue = queue_->Signal();
+        dst.ready = fenceManager_->makeToken(fenceValue);
+        slot.inFlight = dst.ready;
+
+        dst.dxgiFormat = srcDesc.Format;
+        dst.resourceState = D3D12_RESOURCE_STATE_COMMON;
+        dst.textureResource.SetState(dst.resourceState);
+        dst.timing = src.timing;
+        dst.format = src.format;
+        dst.format.width = width;
+        dst.format.height = height;
+        dst.chunkMetadata = src.chunkMetadata;
+        return createSrv(dst);
+    } catch (const std::exception& e) {
+        setError(ErrorCode::D3D12Error, "D3D12FrameResizer::resizeFrame", e.what());
+        return false;
+    }
+}
+
+} // namespace IC4Ext
+''', encoding='utf-8', newline='\n')
+
+          for backend in ('D3D11', 'D3D12'):
+              source = f'src/{backend}/{backend}CameraCaptureThread.cpp'
+              queue = f'{backend}IndexedFrameQueue'
+              frame = f'{backend}CameraFrame'
+              thread = f'{backend}CameraCaptureThread'
+              replace(source,
+              f'''void {thread}::addOutputQueue(std::uint32_t cameraIndex,
+                                                       std::shared_ptr<{queue}> queue)
+          {{
+              if (!queue) {{
+                  setError(ErrorCode::InvalidArgument, "{thread}::addOutputQueue", "queue is null");
+                  return;
+              }}
+              std::lock_guard<std::mutex> lock(outputMutex_);
+              outputs_.push_back(OutputBinding{{cameraIndex, std::move(queue)}});
+          }}''',
+              f'''void {thread}::addOutputQueue(std::uint32_t cameraIndex,
+                                                       std::shared_ptr<{queue}> queue)
+          {{
+              addOutputQueue(cameraIndex, std::move(queue), {{}});
+          }}
+
+          void {thread}::addOutputQueue(std::uint32_t cameraIndex,
+                                        std::shared_ptr<{queue}> queue,
+                                        CameraOutputQueueOptions options)
+          {{
+              if (!queue || !options.valid()) {{
+                  setError(ErrorCode::InvalidArgument, "{thread}::addOutputQueue", !queue ? "queue is null" : "width and height must both be zero or both be positive");
+                  return;
+              }}
+              std::lock_guard<std::mutex> lock(outputMutex_);
+              outputs_.push_back(OutputBinding{{cameraIndex, std::move(queue), options}});
+          }}''')
+
+              # Initialize resizer beside copier.
+              if backend == 'D3D11':
+                  old = '''        if (!copier_.initialize(core_->GetDevice(), core_->GetImmediateContext(), copyFenceManager_.get())) {
+                      lastError_ = copier_.lastError();
+                      return false;
+                  }'''
+                  new = '''        if (!copier_.initialize(core_->GetDevice(), core_->GetImmediateContext(), copyFenceManager_.get())) {
+                      lastError_ = copier_.lastError();
+                      return false;
+                  }
+                  if (!resizer_.initialize(core_, copyFenceManager_.get())) {
+                      lastError_ = resizer_.lastError();
+                      return false;
+                  }'''
+              else:
+                  old = '''        if (!copier_.initialize(backend_, copyFenceManager_.get())) {
+                      lastError_ = copier_.lastError();
+                      return false;
+                  }'''
+                  new = '''        if (!copier_.initialize(backend_, copyFenceManager_.get())) {
+                      lastError_ = copier_.lastError();
+                      return false;
+                  }
+                  if (!resizer_.initialize(backend_, copyFenceManager_.get())) {
+                      lastError_ = resizer_.lastError();
+                      return false;
+                  }'''
+              replace(source, old, new)
+
+              start = f'void {thread}::dispatchFrame({frame}&& frame)\n{{'
+              text = Path(source).read_text(encoding='utf-8')
+              pos = text.index(start)
+              end = text.index('\n}\n\n} // namespace IC4Ext', pos) + 2
+              replacement = f'''void {thread}::dispatchFrame({frame}&& frame)
+          {{
+              std::vector<OutputBinding> outputs;
+              {{
+                  std::lock_guard<std::mutex> lock(outputMutex_);
+                  outputs = outputs_;
+              }}
+
+              if (outputs.empty()) {{
+                  std::lock_guard<std::mutex> lock(statsMutex_);
+                  ++stats_.noOutputDrops;
+                  return;
+              }}
+
+              auto pushFrame = [this](const OutputBinding& output, {frame}&& value) {{
+                  auto result = output.queue->push({backend}IndexedCameraFrame{{output.cameraIndex, std::move(value)}});
+                  std::lock_guard<std::mutex> lock(statsMutex_);
+                  if (IsQueuePushSucceeded(result)) ++stats_.pushedFrames;
+                  else ++stats_.pushFailures;
+              }};
+
+              if (!options_.copyPerOutputQueue) {{
+                  const auto& output = outputs.front();
+                  if (!output.options.resizeEnabled()) {{
+                      pushFrame(output, std::move(frame));
+                      return;
+                  }}
+                  {frame} resized;
+                  if (!resizer_.resizeFrame(frame, output.options.width, output.options.height, resized)) {{
+                      std::lock_guard<std::mutex> lock(statsMutex_);
+                      ++stats_.resizeFailures;
+                      lastError_ = resizer_.lastError();
+                      return;
+                  }}
+                  {{ std::lock_guard<std::mutex> lock(statsMutex_); ++stats_.resizedFrames; }}
+                  pushFrame(output, std::move(resized));
+                  return;
+              }}
+
+              // Resize outputs first while the original frame is still available.
+              for (const auto& output : outputs) {{
+                  if (!output.options.resizeEnabled()) continue;
+                  {frame} resized;
+                  if (!resizer_.resizeFrame(frame, output.options.width, output.options.height, resized)) {{
+                      std::lock_guard<std::mutex> lock(statsMutex_);
+                      ++stats_.resizeFailures;
+                      lastError_ = resizer_.lastError();
+                      continue;
+                  }}
+                  {{ std::lock_guard<std::mutex> lock(statsMutex_); ++stats_.resizedFrames; }}
+                  pushFrame(output, std::move(resized));
+              }}
+
+              std::vector<const OutputBinding*> passthrough;
+              for (const auto& output : outputs) {{
+                  if (!output.options.resizeEnabled()) passthrough.push_back(&output);
+              }}
+              if (passthrough.empty()) return;
+
+              if (passthrough.size() > 1 && !copyFenceManager_) {{
+                  std::lock_guard<std::mutex> lock(statsMutex_);
+                  ++stats_.copyFailures;
+                  lastError_ = MakeError(ErrorCode::ThreadError,
+                                         "{thread}::dispatchFrame",
+                                         "Multiple pass-through queues require an internally opened real capture thread");
+                  return;
+              }}
+
+              for (std::size_t i = 0; i + 1 < passthrough.size(); ++i) {{
+                  {frame} copied;
+                  if (!copier_.copyFrame(frame, copied)) {{
+                      std::lock_guard<std::mutex> lock(statsMutex_);
+                      ++stats_.copyFailures;
+                      lastError_ = copier_.lastError();
+                      continue;
+                  }}
+                  {{ std::lock_guard<std::mutex> lock(statsMutex_); ++stats_.copiedFrames; }}
+                  pushFrame(*passthrough[i], std::move(copied));
+              }}
+              pushFrame(*passthrough.back(), std::move(frame));
+          }}'''
+              Path(source).write_text(text[:pos] + replacement + text[end:], encoding='utf-8', newline='\n')
+
+          # Expose new resizers through the umbrella header if backend headers are listed there.
+          for backend in ('D3D11', 'D3D12'):
+              p = Path('include/IC4Ext/IC4Ext.hpp')
+              text = p.read_text(encoding='utf-8-sig')
+              marker = f'#include "IC4Ext/{backend}/{backend}FrameCopier.hpp"'
+              addition = marker + f'\n#include "IC4Ext/{backend}/{backend}FrameResizer.hpp"'
+              if marker in text and f'{backend}FrameResizer.hpp' not in text:
+                  text = text.replace(marker, addition)
+                  p.write_text(text, encoding='utf-8', newline='\n')
+
+          # Extend existing no-camera tests with option validation and pass-through compatibility.
+          for backend in ('d3d11', 'd3d12'):
+              path = Path(f'tests/test_{backend}_camera_capture_thread_outputs.cpp')
+              text = path.read_text(encoding='utf-8-sig')
+              needle = '    assert(captureThread.outputQueueCount() == 0);\n\n    auto output1'
+              insert = '''    assert(captureThread.outputQueueCount() == 0);
+
+              // Invalid partial resize specifications are rejected without registering a queue.
+              auto invalidOutput = std::make_shared<IC4Ext::BACKENDIndexedFrameQueue>(queueOptions);
+              captureThread.addOutputQueue(1, invalidOutput, IC4Ext::CameraOutputQueueOptions{320, 0});
+              assert(captureThread.outputQueueCount() == 0);
+
+              auto output1'''.replace('BACKEND', backend.upper())
+              if needle not in text:
+                  raise SystemExit(f'test insertion point missing: {path}')
+              path.write_text(text.replace(needle, insert), encoding='utf-8', newline='\n')
+
+          Path('docs/design/17_PerOutputResize.md').write_text(r'''# CameraCaptureThread per-output resize
+
+`D3D11CameraCaptureThread` and `D3D12CameraCaptureThread` can resize a frame independently for each registered output queue immediately before the queue push.
+
+```cpp
+captureThread.addOutputQueue(0, originalQueue); // no resize
+
+IC4Ext::CameraOutputQueueOptions preview;
+preview.width = 640;
+preview.height = 360;
+captureThread.addOutputQueue(0, previewQueue, preview);
+```
+
+The existing two-argument overload remains source-compatible and sends the original dimensions. `{0, 0}` also means pass-through. Both dimensions must be positive to enable resize; partial and negative specifications are rejected.
+
+Resize is an exact stretch to the requested width and height with the D3D11Helper/D3D12Helper linear GPU resizer. It does not preserve aspect ratio or add letterboxing. Frame timing, frame number, device timestamp, and chunk metadata are preserved. `FrameFormatMetadata::width` and `height` are changed to the resized dimensions.
+
+Each resize output owns a distinct GPU texture and ready token. Pass-through outputs retain the existing copy behavior. When `copyPerOutputQueue` is false, only the first registered output is processed, matching the existing behavior.
+''', encoding='utf-8', newline='\n')
+
+      - name: Commit implementation
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/apply-per-output-resize.yml
+          git add include src tests docs
+          git commit -m "Add per-output CameraCaptureThread resizing"
+          git push origin HEAD:agent/per-output-resize
