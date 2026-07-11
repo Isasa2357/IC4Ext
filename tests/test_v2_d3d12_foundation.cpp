@@ -1,13 +1,22 @@
 #include "IC4Ext/V2/Core/FrameSyncOutputConfig.hpp"
 #include "IC4Ext/V2/Core/FrameSyncTypes.hpp"
+#include "IC4Ext/V2/D3D12/D3D12FramePool.hpp"
+#include "IC4Ext/V2/D3D12/D3D12PooledFrameConverter.hpp"
 #include "IC4Ext/V2/D3D12/D3D12ReadOnlyFrameSet.hpp"
 
 #include <cassert>
 #include <chrono>
+#include <type_traits>
+#include <utility>
 
 int main()
 {
     using namespace IC4Ext::V2;
+
+    static_assert(!std::is_copy_constructible_v<D3D12FrameWriter>);
+    static_assert(std::is_move_constructible_v<D3D12FrameWriter>);
+    static_assert(!std::is_copy_constructible_v<D3D12PooledFrameConverter>);
+    static_assert(std::is_move_constructible_v<D3D12PooledFrameConverter>);
 
     assert(FrameRateLimit::Maximum().isValid());
     assert(FrameRateLimit::Fixed(60.0).isValid());
@@ -20,6 +29,14 @@ int main()
 
     config.cameraIds = {0, 0};
     assert(!config.isValid());
+
+    D3D12FramePoolConfig poolConfig;
+    poolConfig.width = 1536;
+    poolConfig.height = 1536;
+    poolConfig.format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    assert(poolConfig.isValid());
+    poolConfig.createSrv = false;
+    assert(!poolConfig.isValid());
 
     D3D12ReadOnlyFrameSet::FrameList frames;
     frames.push_back(D3D12IndexedReadOnlyFrame{1, {}});
