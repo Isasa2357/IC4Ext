@@ -128,14 +128,14 @@ bool D3D12FrameResizer::resizeFrame(const D3D12CameraFrame& src,
         return false;
     }
 
-    if (src.ready.isValid()) {
-        queue_->GpuWait(src.ready.fence.Get(), src.ready.value);
-    }
-
-    FrameSlot* slot = acquireSlot();
-    if (!slot) return false;
-
     try {
+        if (src.ready.isValid()) {
+            queue_->GpuWait(src.ready.fence.Get(), src.ready.value);
+        }
+
+        FrameSlot* slot = acquireSlot();
+        if (!slot) return false;
+
         dst.textureResource = slot->resizer.CreateOutputTexture(
             *core_,
             options.width,
@@ -144,7 +144,15 @@ bool D3D12FrameResizer::resizeFrame(const D3D12CameraFrame& src,
             D3D12_RESOURCE_STATE_COMMON);
         dst.texture = dst.textureResource.Get();
         dst.dxgiFormat = src.dxgiFormat;
+
+        // The queue wait guarantees execution order, while these references guarantee
+        // that all resources used by the source submission remain alive until the
+        // resized frame has completed.
         dst.processingSourceKeepAlive = src.texture;
+        dst.uploadKeepAlive = src.uploadKeepAlive;
+        dst.inputBufferKeepAlive = src.inputBufferKeepAlive;
+        dst.commandAllocatorKeepAlive = src.commandAllocatorKeepAlive;
+        dst.commandListKeepAlive = src.commandListKeepAlive;
 
         D3D12CoreLib::Processing::ResizeDesc desc{};
         desc.filter = options.filter == CameraOutputResizeFilter::Point
