@@ -25,6 +25,10 @@ struct D3D12CameraFrame
     Microsoft::WRL::ComPtr<ID3D12Resource> inputBufferKeepAlive;
     Microsoft::WRL::ComPtr<ID3D12CommandAllocator> commandAllocatorKeepAlive;
     Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> commandListKeepAlive;
+
+    // Keeps a borrowed source texture alive while per-output GPU processing is in flight.
+    Microsoft::WRL::ComPtr<ID3D12Resource> processingSourceKeepAlive;
+
     D3D12CoreLib::D3D12DescriptorHeap srvHeapHelper;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvHeap;
     D3D12_CPU_DESCRIPTOR_HANDLE srvCpuHandle{};

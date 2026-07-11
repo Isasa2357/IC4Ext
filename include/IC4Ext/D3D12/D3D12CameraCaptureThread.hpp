@@ -20,6 +20,8 @@
 
 namespace IC4Ext {
 
+class D3D12FrameResizer;
+
 class D3D12CameraCaptureThread
 {
 public:
@@ -47,8 +49,14 @@ public:
     void join();
     void stopAndJoin();
 
+    // Existing behavior: register an output that receives the original-sized frame.
     void addOutputQueue(std::uint32_t cameraIndex,
                         std::shared_ptr<D3D12IndexedFrameQueue> queue);
+
+    // Register an output with optional per-queue GPU resize. {0,0} is passthrough.
+    void addOutputQueue(std::uint32_t cameraIndex,
+                        std::shared_ptr<D3D12IndexedFrameQueue> queue,
+                        CameraOutputResizeOptions resize);
 
     std::size_t removeOutputQueue(
         std::uint32_t cameraIndex,
@@ -221,12 +229,14 @@ private:
     {
         std::uint32_t cameraIndex = 0;
         std::shared_ptr<D3D12IndexedFrameQueue> queue;
+        CameraOutputResizeOptions resize;
     };
 
     enum class SourceMode { InternalCapture, MovedCapture, ExternalSource };
 
     void workerLoop();
     void dispatchFrame(D3D12CameraFrame&& frame);
+    bool ensureResizer();
     void setError(ErrorCode code, const char* where, const std::string& message);
 
     IC4DeviceSelector selector_;
@@ -241,6 +251,7 @@ private:
 
     std::unique_ptr<D3D12FenceManager> copyFenceManager_;
     D3D12FrameCopier copier_;
+    std::unique_ptr<D3D12FrameResizer> resizer_;
 
     mutable std::mutex outputMutex_;
     std::vector<OutputBinding> outputs_;
