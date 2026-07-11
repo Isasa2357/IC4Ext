@@ -1,0 +1,3 @@
+# Copied output sampling
+
+placeholder
