@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <utility>
 
 namespace IC4Ext {
@@ -23,6 +24,41 @@ bool IsQueuePushSucceeded(ThreadKit::Queues::QueuePushResult result)
 {
     return result == ThreadKit::Queues::QueuePushResult::Pushed ||
            result == ThreadKit::Queues::QueuePushResult::DroppedOldestAndPushed;
+}
+
+bool ShouldEmitCopiedOutputs(
+    std::uint64_t sourceFrameSequence,
+    const CameraThreadOptions& options,
+    const CameraCaptureConfig& config)
+{
+    const std::uint32_t copyStride =
+        std::max<std::uint32_t>(1u, options.copiedOutputFrameStride);
+    const std::uint32_t copyBurst =
+        std::min(copyStride,
+                 std::max<std::uint32_t>(1u, options.copiedOutputFrameBurst));
+
+    if (copyBurst >= copyStride) {
+        return true;
+    }
+
+    const double fps = config.streamRequest.fps;
+    if (std::isfinite(fps) && fps > 0.0) {
+        // A shared process-wide epoch makes copied-output bursts line up across
+        // independent camera worker threads. This is important for stereo
+        // consumers because per-camera frame counters can have arbitrary phase.
+        static const auto epoch = std::chrono::steady_clock::now();
+        const double periodSeconds = static_cast<double>(copyStride) / fps;
+        const double burstSeconds = static_cast<double>(copyBurst) / fps;
+        if (std::isfinite(periodSeconds) && std::isfinite(burstSeconds) &&
+            periodSeconds > 0.0 && burstSeconds > 0.0) {
+            const double elapsedSeconds = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - epoch).count();
+            const double position = std::fmod(elapsedSeconds, periodSeconds);
+            return position >= 0.0 && position < burstSeconds;
+        }
+    }
+
+    return (sourceFrameSequence % copyStride) < copyBurst;
 }
 
 } // namespace
@@ -429,13 +465,8 @@ void D3D12CameraCaptureThread::dispatchFrame(D3D12CameraFrame&& frame)
         return;
     }
 
-    const std::uint32_t copyStride =
-        std::max<std::uint32_t>(1u, options_.copiedOutputFrameStride);
-    const std::uint32_t copyBurst =
-        std::min(copyStride,
-                 std::max<std::uint32_t>(1u, options_.copiedOutputFrameBurst));
     const bool emitCopiedOutputs =
-        (sourceFrameSequence % copyStride) < copyBurst;
+        ShouldEmitCopiedOutputs(sourceFrameSequence, options_, config_);
 
     if (emitCopiedOutputs) {
         if (!copyFenceManager_) {
