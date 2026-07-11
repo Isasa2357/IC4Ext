@@ -16,6 +16,8 @@ namespace IC4Ext {
 class D3D11FrameResizer
 {
 public:
+    ~D3D11FrameResizer();
+
     bool initialize(D3D11CoreLib::D3D11Core* core,
                     D3D11FenceManager* fenceManager,
                     const std::filesystem::path& shaderDirectory);
@@ -33,6 +35,7 @@ private:
     D3D11FenceManager* fenceManager_ = nullptr;
     D3D11CoreLib::Processing::D3D11ProcessingContext processingContext_;
     D3D11CoreLib::Processing::D3D11Resizer resizer_;
+    D3D11ReadyToken lastInFlight_;
     bool initialized_ = false;
     ErrorInfo lastError_;
 };
