@@ -7,6 +7,15 @@
 
 namespace IC4Ext {
 
+D3D12FrameResizer::~D3D12FrameResizer()
+{
+    for (auto& slot : slots_) {
+        if (slot.inFlight.isValid()) {
+            slot.inFlight.wait(INFINITE);
+        }
+    }
+}
+
 void D3D12FrameResizer::setError(ErrorCode code, const char* where, const std::string& message)
 {
     lastError_ = MakeError(code, where, message);
@@ -135,6 +144,7 @@ bool D3D12FrameResizer::resizeFrame(const D3D12CameraFrame& src,
             D3D12_RESOURCE_STATE_COMMON);
         dst.texture = dst.textureResource.Get();
         dst.dxgiFormat = src.dxgiFormat;
+        dst.processingSourceKeepAlive = src.texture;
 
         D3D12CoreLib::Processing::ResizeDesc desc{};
         desc.filter = options.filter == CameraOutputResizeFilter::Point
