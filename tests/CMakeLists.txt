@@ -33,6 +33,10 @@ if(IC4EXT_ENABLE_D3D11)
 
     ic4ext_add_no_camera_test(test_d3d11_dummy_camera_capture test_d3d11_dummy_camera_capture.cpp)
     ic4ext_add_no_camera_test(test_d3d11_camera_capture_thread_outputs test_d3d11_camera_capture_thread_outputs.cpp)
+    ic4ext_add_no_camera_test(test_d3d11_camera_capture_thread_resize test_d3d11_camera_capture_thread_resize.cpp)
+    set_tests_properties(test_d3d11_camera_capture_thread_resize PROPERTIES
+        SKIP_RETURN_CODE 77
+        TIMEOUT 30)
     ic4ext_add_no_camera_test(test_d3d11_frame_sync_thread test_d3d11_frame_sync_thread.cpp)
 endif()
 
@@ -54,6 +58,10 @@ if(IC4EXT_ENABLE_D3D12)
 
     ic4ext_add_no_camera_test(test_d3d12_dummy_camera_capture test_d3d12_dummy_camera_capture.cpp)
     ic4ext_add_no_camera_test(test_d3d12_camera_capture_thread_outputs test_d3d12_camera_capture_thread_outputs.cpp)
+    ic4ext_add_no_camera_test(test_d3d12_camera_capture_thread_resize test_d3d12_camera_capture_thread_resize.cpp)
+    set_tests_properties(test_d3d12_camera_capture_thread_resize PROPERTIES
+        SKIP_RETURN_CODE 77
+        TIMEOUT 30)
 
     ic4ext_add_no_camera_test(test_d3d12_frame_readback test_d3d12_frame_readback.cpp)
     set_tests_properties(test_d3d12_frame_readback PROPERTIES SKIP_RETURN_CODE 77)
