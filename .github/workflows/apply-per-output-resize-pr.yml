@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   apply:
@@ -17,7 +18,7 @@ jobs:
         with:
           ref: agent/per-output-resize
           fetch-depth: 0
-      - name: Extract and run implementation script
+      - name: Extract implementation script
         shell: bash
         run: |
           python - <<'PY'
@@ -29,8 +30,24 @@ jobs:
           script = '\n'.join(line[10:] if line.startswith('          ') else line for line in lines[run_line + 1:end]) + '\n'
           Path('/tmp/apply_resize.py').write_text(script)
           PY
-          python /tmp/apply_resize.py
+      - name: Run implementation script
+        id: apply_script
+        continue-on-error: true
+        shell: bash
+        run: python /tmp/apply_resize.py 2> /tmp/apply_resize_error.txt
+      - name: Report implementation error
+        if: steps.apply_script.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          printf 'Resize implementation workflow failed:\n\n```text\n' > /tmp/comment.md
+          cat /tmp/apply_resize_error.txt >> /tmp/comment.md
+          printf '\n```\n' >> /tmp/comment.md
+          gh pr comment ${{ github.event.pull_request.number }} --body-file /tmp/comment.md
+          exit 1
       - name: Commit implementation
+        if: steps.apply_script.outcome == 'success'
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
