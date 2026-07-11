@@ -96,7 +96,7 @@ bool D3D12FrameResizer::createSrv(D3D12CameraFrame& frame)
     }
 }
 
-bool D3D12FrameResizer::resizeFrame(const D3D12CameraFrame& src,
+bool D3D12FrameResizer::resizeFrame(D3D12CameraFrame& src,
                                     const CameraOutputResizeOptions& options,
                                     D3D12CameraFrame& dst)
 {
@@ -188,6 +188,10 @@ bool D3D12FrameResizer::resizeFrame(const D3D12CameraFrame& src,
         }
         slot->inFlight = token;
         dst.ready = token;
+
+        // Passthrough consumers of the original source must wait until the resize
+        // read has completed before they may reuse or overwrite the texture.
+        src.ready = token;
 
         dst.textureResource.SetState(src.resourceState);
         dst.resourceState = src.resourceState;
