@@ -59,7 +59,11 @@ int main()
     std::shared_ptr<D3D12CoreLib::D3D12Core> core;
     IC4Ext::D3D12BackendContext backend;
     try {
-        core = D3D12CoreLib::D3D12Core::CreateShared();
+        D3D12CoreLib::D3D12CoreConfig config;
+        config.enableDebugLayer = false;
+        config.enableInfoQueue = false;
+        config.enableDred = false;
+        core = D3D12CoreLib::D3D12Core::CreateShared(config);
         backend = IC4Ext::D3D12BackendContext::FromCore(
             core, IC4Ext::D3D12BackendQueueKind::Direct);
         if (!backend.resolve()) {
