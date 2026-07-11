@@ -1,5 +1,6 @@
 #include "IC4Ext/D3D12/D3D12CameraCaptureThread.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <utility>
 
@@ -139,6 +140,7 @@ bool D3D12CameraCaptureThread::start()
     lastError_ = NoError();
     if (running_.load()) return true;
     if (!open()) return false;
+    dispatchedFrameCount_ = 0;
     stopRequested_.store(false);
     worker_ = std::thread(&D3D12CameraCaptureThread::workerLoop, this);
     running_.store(true);
@@ -416,40 +418,56 @@ void D3D12CameraCaptureThread::dispatchFrame(D3D12CameraFrame&& frame)
         return;
     }
 
+    const std::uint64_t sourceFrameSequence = dispatchedFrameCount_++;
+
     if (outputs.size() == 1 || !options_.copyPerOutputQueue) {
-        auto res = outputs.front().queue->push(D3D12IndexedCameraFrame{outputs.front().cameraIndex, std::move(frame)});
+        auto res = outputs.front().queue->push(
+            D3D12IndexedCameraFrame{outputs.front().cameraIndex, std::move(frame)});
         std::lock_guard<std::mutex> lock(statsMutex_);
         if (IsQueuePushSucceeded(res)) ++stats_.pushedFrames;
         else ++stats_.pushFailures;
         return;
     }
 
-    if (!copyFenceManager_) {
-        std::lock_guard<std::mutex> lock(statsMutex_);
-        ++stats_.copyFailures;
-        lastError_ = MakeError(ErrorCode::ThreadError,
-                               "D3D12CameraCaptureThread::dispatchFrame",
-                               "Multiple output queues require an internally opened real capture thread so frame copies can be fenced");
-        return;
-    }
+    const std::uint32_t copyStride =
+        std::max<std::uint32_t>(1u, options_.copiedOutputFrameStride);
+    const std::uint32_t copyBurst =
+        std::min(copyStride,
+                 std::max<std::uint32_t>(1u, options_.copiedOutputFrameBurst));
+    const bool emitCopiedOutputs =
+        (sourceFrameSequence % copyStride) < copyBurst;
 
-    for (std::size_t i = 0; i + 1 < outputs.size(); ++i) {
-        D3D12CameraFrame copied;
-        if (!copier_.copyFrame(frame, copied)) {
+    if (emitCopiedOutputs) {
+        if (!copyFenceManager_) {
             std::lock_guard<std::mutex> lock(statsMutex_);
             ++stats_.copyFailures;
-            lastError_ = copier_.lastError();
-            continue;
+            lastError_ = MakeError(
+                ErrorCode::ThreadError,
+                "D3D12CameraCaptureThread::dispatchFrame",
+                "Multiple output queues require an internally opened real capture thread so frame copies can be fenced");
+            return;
         }
-        auto res = outputs[i].queue->push(D3D12IndexedCameraFrame{outputs[i].cameraIndex, std::move(copied)});
-        std::lock_guard<std::mutex> lock(statsMutex_);
-        ++stats_.copiedFrames;
-        if (IsQueuePushSucceeded(res)) ++stats_.pushedFrames;
-        else ++stats_.pushFailures;
+
+        for (std::size_t i = 0; i + 1 < outputs.size(); ++i) {
+            D3D12CameraFrame copied;
+            if (!copier_.copyFrame(frame, copied)) {
+                std::lock_guard<std::mutex> lock(statsMutex_);
+                ++stats_.copyFailures;
+                lastError_ = copier_.lastError();
+                continue;
+            }
+            auto res = outputs[i].queue->push(
+                D3D12IndexedCameraFrame{outputs[i].cameraIndex, std::move(copied)});
+            std::lock_guard<std::mutex> lock(statsMutex_);
+            ++stats_.copiedFrames;
+            if (IsQueuePushSucceeded(res)) ++stats_.pushedFrames;
+            else ++stats_.pushFailures;
+        }
     }
 
     auto& last = outputs.back();
-    auto res = last.queue->push(D3D12IndexedCameraFrame{last.cameraIndex, std::move(frame)});
+    auto res = last.queue->push(
+        D3D12IndexedCameraFrame{last.cameraIndex, std::move(frame)});
     std::lock_guard<std::mutex> lock(statsMutex_);
     if (IsQueuePushSucceeded(res)) ++stats_.pushedFrames;
     else ++stats_.pushFailures;
