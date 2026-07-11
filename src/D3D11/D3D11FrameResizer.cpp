@@ -36,7 +36,7 @@ bool D3D11FrameResizer::initialize(D3D11CoreLib::D3D11Core* core,
     }
 }
 
-bool D3D11FrameResizer::resizeFrame(const D3D11CameraFrame& src,
+bool D3D11FrameResizer::resizeFrame(D3D11CameraFrame& src,
                                     const CameraOutputResizeOptions& options,
                                     D3D11CameraFrame& dst)
 {
@@ -108,6 +108,10 @@ bool D3D11FrameResizer::resizeFrame(const D3D11CameraFrame& src,
                      fenceManager_->lastError().message);
             return false;
         }
+
+        // Passthrough consumers of the original source must also wait until the
+        // resize read has completed before they may reuse or overwrite it.
+        src.ready = dst.ready;
 
         dst.timing = src.timing;
         dst.format = src.format;
