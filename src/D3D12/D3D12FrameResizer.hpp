@@ -26,7 +26,7 @@ public:
                     D3D12FenceManager* fenceManager,
                     const std::filesystem::path& shaderDirectory);
 
-    bool resizeFrame(const D3D12CameraFrame& src,
+    bool resizeFrame(D3D12CameraFrame& src,
                      const CameraOutputResizeOptions& options,
                      D3D12CameraFrame& dst);
 
