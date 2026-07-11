@@ -18,6 +18,10 @@ struct D3D11CameraFrame
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srv;
     Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> uav;
 
+    // Keeps a borrowed source texture alive until this frame's ready token has
+    // completed. Used by per-output queue GPU processing.
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> processingSourceKeepAlive;
+
     D3D11ReadyToken ready;
     FrameTiming timing;
     FrameFormatMetadata format;
