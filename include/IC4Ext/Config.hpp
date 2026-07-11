@@ -39,6 +39,25 @@ enum class FrameQueuePolicy : std::uint32_t
     PreserveFrames = 1,
 };
 
+enum class CameraOutputResizeFilter : std::uint32_t
+{
+    Point = 0,
+    Linear = 1,
+};
+
+// Per-output-queue resize configuration. width == 0 and height == 0 keeps the
+// original frame size. Supplying only one non-zero dimension is invalid.
+struct CameraOutputResizeOptions
+{
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    CameraOutputResizeFilter filter = CameraOutputResizeFilter::Linear;
+
+    bool enabled() const noexcept { return width != 0 && height != 0; }
+    bool isPassthrough() const noexcept { return width == 0 && height == 0; }
+    bool isValid() const noexcept { return (width == 0) == (height == 0); }
+};
+
 enum class ShaderInputKind : std::uint32_t
 {
     Auto = 0,
@@ -177,6 +196,10 @@ struct CameraThreadOptions
     std::uint32_t readTimeoutMs = 1000;
     bool copyPerOutputQueue = true;
     bool stopOnReadError = false;
+
+    // Optional D3D11Helper/D3D12Helper Processing shader directory. When empty,
+    // the helper default under the process working directory is used.
+    std::filesystem::path outputProcessingShaderDirectory;
 };
 
 enum class FrameSyncPolicy : std::uint32_t
