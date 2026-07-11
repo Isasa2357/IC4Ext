@@ -20,6 +20,8 @@ namespace IC4Ext {
 class D3D12FrameResizer
 {
 public:
+    ~D3D12FrameResizer();
+
     bool initialize(const D3D12BackendContext& backend,
                     D3D12FenceManager* fenceManager,
                     const std::filesystem::path& shaderDirectory);
