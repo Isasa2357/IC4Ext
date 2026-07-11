@@ -30,8 +30,13 @@ struct D3D12FramePoolConfig
     D3D12_RESOURCE_FLAGS resourceFlags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
     D3D12_RESOURCE_STATES writeState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
     D3D12_RESOURCE_STATES publishedState = D3D12_RESOURCE_STATE_GENERIC_READ;
+
+    // A published v2 frame is always an SRV-capable read-only frame.
+    // createSrv therefore must remain true. createUav is optional so future
+    // producers can use COPY_DEST or render-target based write paths.
     bool createSrv = true;
     bool createUav = true;
+
     std::size_t initialCapacity = 8;
     std::size_t maxCapacity = 32;
     FramePoolExhaustionPolicy exhaustionPolicy = FramePoolExhaustionPolicy::DropNewest;
@@ -41,7 +46,7 @@ struct D3D12FramePoolConfig
     {
         return width > 0 && height > 0 && format != DXGI_FORMAT_UNKNOWN &&
                initialCapacity > 0 && maxCapacity >= initialCapacity &&
-               (createSrv || createUav) && waitTimeout.count() >= 0;
+               createSrv && waitTimeout.count() >= 0;
     }
 };
 
@@ -78,6 +83,10 @@ public:
     D3D12_CPU_DESCRIPTOR_HANDLE uavCpuHandle() const noexcept;
     D3D12_GPU_DESCRIPTOR_HANDLE uavGpuHandle() const noexcept;
     DXGI_FORMAT dxgiFormat() const noexcept;
+
+    // initialState() is the state left by the previous publication of this pool
+    // entry. The producer must transition initialState() -> writeState() before
+    // writing and writeState() -> publishedState() before publish().
     D3D12_RESOURCE_STATES initialState() const noexcept;
     D3D12_RESOURCE_STATES writeState() const noexcept;
     D3D12_RESOURCE_STATES publishedState() const noexcept;
