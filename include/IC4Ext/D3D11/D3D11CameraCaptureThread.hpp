@@ -21,6 +21,8 @@
 
 namespace IC4Ext {
 
+class D3D11FrameResizer;
+
 class D3D11CameraCaptureThread
 {
 public:
@@ -32,8 +34,16 @@ public:
     explicit D3D11CameraCaptureThread(D3D11CameraCapture&& capture,
                                       CameraThreadOptions options = {});
 
+    D3D11CameraCaptureThread(D3D11CameraCapture&& capture,
+                             D3D11CoreLib::D3D11Core* core,
+                             CameraThreadOptions options = {});
+
     explicit D3D11CameraCaptureThread(std::shared_ptr<ID3D11Camera> source,
                                       CameraThreadOptions options = {});
+
+    D3D11CameraCaptureThread(std::shared_ptr<ID3D11Camera> source,
+                             D3D11CoreLib::D3D11Core* core,
+                             CameraThreadOptions options = {});
 
     ~D3D11CameraCaptureThread();
 
@@ -46,8 +56,14 @@ public:
     void join();
     void stopAndJoin();
 
+    // Existing behavior: register an output that receives the original-sized frame.
     void addOutputQueue(std::uint32_t cameraIndex,
                         std::shared_ptr<D3D11IndexedFrameQueue> queue);
+
+    // Register an output with optional per-queue GPU resize. {0,0} is passthrough.
+    void addOutputQueue(std::uint32_t cameraIndex,
+                        std::shared_ptr<D3D11IndexedFrameQueue> queue,
+                        CameraOutputResizeOptions resize);
 
     std::size_t removeOutputQueue(
         std::uint32_t cameraIndex,
@@ -226,10 +242,12 @@ private:
     {
         std::uint32_t cameraIndex = 0;
         std::shared_ptr<D3D11IndexedFrameQueue> queue;
+        CameraOutputResizeOptions resize;
     };
 
     void workerLoop();
     void dispatchFrame(D3D11CameraFrame&& frame);
+    bool ensureResizer();
     void setError(ErrorCode code, const std::string& where, const std::string& message);
     bool hasRuntimeSource() const noexcept { return static_cast<bool>(source_); }
 
@@ -251,6 +269,7 @@ private:
 
     std::unique_ptr<D3D11FenceManager> copyFenceManager_;
     D3D11FrameCopier copier_;
+    std::unique_ptr<D3D11FrameResizer> resizer_;
 
     mutable std::mutex outputMutex_;
     std::vector<OutputBinding> outputs_;
