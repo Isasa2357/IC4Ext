@@ -1,0 +1,43 @@
+name: Apply per-output resize on PR
+
+on:
+  pull_request:
+    branches:
+      - agent/dynamic-output-queues
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/per-output-resize
+          fetch-depth: 0
+      - name: Extract and run implementation script
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          lines = Path('.github/workflows/apply-per-output-resize.yml').read_text().splitlines()
+          start = next(i for i, line in enumerate(lines) if line.strip() == '- name: Apply implementation')
+          run_line = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == 'run: |')
+          end = next(i for i in range(run_line + 1, len(lines)) if lines[i].startswith('      - name: Commit implementation'))
+          script = '\n'.join(line[10:] if line.startswith('          ') else line for line in lines[run_line + 1:end]) + '\n'
+          Path('/tmp/apply_resize.py').write_text(script)
+          PY
+          python /tmp/apply_resize.py
+      - name: Commit implementation
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/apply-per-output-resize.yml
+          git rm .github/workflows/apply-per-output-resize-pr.yml
+          git rm -f docs/.per-output-resize-trigger
+          git add include src tests docs
+          git commit -m "Add per-output CameraCaptureThread resizing"
+          git push origin HEAD:agent/per-output-resize
