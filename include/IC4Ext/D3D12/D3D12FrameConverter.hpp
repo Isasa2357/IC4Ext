@@ -19,6 +19,10 @@
 #include <string>
 #include <vector>
 
+namespace IC4Ext::V2 {
+class D3D12PooledFrameConverter;
+}
+
 namespace IC4Ext {
 
 struct D3D12CpuFrameView
@@ -105,6 +109,8 @@ private:
     std::uint64_t uploadRingSizeBytes_ = 64ull * 1024ull * 1024ull;
 
     ErrorInfo lastError_;
+
+    friend class V2::D3D12PooledFrameConverter;
 };
 
 } // namespace IC4Ext
