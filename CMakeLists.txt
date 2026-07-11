@@ -230,6 +230,7 @@ if(IC4EXT_ENABLE_D3D12)
         src/D3D12/D3D12FrameSyncThread.cpp
         src/V2/D3D12/D3D12ReadOnlyFrame.cpp
         src/V2/D3D12/D3D12FramePool.cpp
+        src/V2/D3D12/D3D12PooledFrameConverter.cpp
         src/V2/D3D12/D3D12ReadOnlyFrameSet.cpp
         src/V2/D3D12/D3D12FrameSyncThread.cpp)
 endif()
