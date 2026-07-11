@@ -12,11 +12,6 @@ include(FetchContent)
 
 option(IC4EXT_BUILD_SAMPLES "Build IC4Ext samples" ON)
 option(IC4EXT_BUILD_TESTS "Build IC4Ext tests" ON)
-
-# Backend selection. These options also define public preprocessor macros:
-#   IC4EXT_ENABLE_D3D11
-#   IC4EXT_ENABLE_D3D12
-# Users that include headers manually can define the same macros themselves.
 option(IC4EXT_ENABLE_D3D11 "Build and expose the D3D11 backend" ON)
 option(IC4EXT_ENABLE_D3D12 "Build and expose the D3D12 backend" ON)
 
@@ -27,41 +22,33 @@ endif()
 message(STATUS "IC4Ext version: ${PROJECT_VERSION}")
 message(STATUS "IC4Ext backend selection: D3D11=${IC4EXT_ENABLE_D3D11}, D3D12=${IC4EXT_ENABLE_D3D12}")
 
-# Dependency acquisition policy.
-# IC4 SDK is not fetched: install IC Imaging Control 4 locally and pass IC4_SDK_ROOT.
 option(IC4EXT_FETCH_DEPENDENCIES "Fetch open-source dependencies with CMake FetchContent" ON)
 option(IC4EXT_FETCH_D3D11HELPER "Fetch D3D11Helper from GitHub when D3D11HELPER_ROOT is empty" ON)
 option(IC4EXT_FETCH_D3D12HELPER "Fetch D3D12Helper from GitHub when D3D12HELPER_ROOT is empty" ON)
 option(IC4EXT_FETCH_THREADKIT "Fetch ThreadKit from GitHub when THREADKIT_ROOT is empty" ON)
 option(IC4EXT_FETCH_NLOHMANN_JSON "Fetch nlohmann/json from GitHub instead of find_package" ON)
 
-set(IC4_SDK_ROOT "" CACHE PATH "Path to IC Imaging Control 4 SDK root. If empty, IC4Ext uses the IC4PATH environment variable when available.")
+set(IC4_SDK_ROOT "" CACHE PATH "Path to IC Imaging Control 4 SDK root. If empty, IC4Ext uses IC4PATH.")
 if(NOT IC4_SDK_ROOT AND DEFINED ENV{IC4PATH} AND NOT "$ENV{IC4PATH}" STREQUAL "")
     file(TO_CMAKE_PATH "$ENV{IC4PATH}" IC4EXT_IC4PATH_ROOT)
     set(IC4_SDK_ROOT "${IC4EXT_IC4PATH_ROOT}" CACHE PATH "Path to IC Imaging Control 4 SDK root" FORCE)
     message(STATUS "IC4Ext: using IC4_SDK_ROOT from IC4PATH=${IC4_SDK_ROOT}")
 endif()
-set(D3D11HELPER_ROOT "" CACHE PATH "Optional local path to D3D11Helper. Overrides FetchContent when set.")
-set(D3D12HELPER_ROOT "" CACHE PATH "Optional local path to D3D12Helper. Overrides FetchContent when set.")
-set(THREADKIT_ROOT "" CACHE PATH "Optional local path to ThreadKit. Overrides FetchContent when set.")
 
-# Pin helper dependencies by tag. D3D11Helper/D3D12Helper CMake project versions may lag the tag name,
-# so the Git ref is the authoritative version selector for IC4Ext.
-set(IC4EXT_D3D11HELPER_GIT_TAG "v1.12.1" CACHE STRING "Git tag/branch/commit for D3D11Helper FetchContent")
-set(IC4EXT_D3D12HELPER_GIT_TAG "v1.12.1" CACHE STRING "Git tag/branch/commit for D3D12Helper FetchContent")
-set(IC4EXT_THREADKIT_GIT_TAG "main" CACHE STRING "Git tag/branch/commit for ThreadKit FetchContent")
-set(IC4EXT_NLOHMANN_JSON_GIT_TAG "v3.11.3" CACHE STRING "Git tag/branch/commit for nlohmann/json FetchContent")
+set(D3D11HELPER_ROOT "" CACHE PATH "Optional local path to D3D11Helper")
+set(D3D12HELPER_ROOT "" CACHE PATH "Optional local path to D3D12Helper")
+set(THREADKIT_ROOT "" CACHE PATH "Optional local path to ThreadKit")
+
+# v2.0.0 intentionally keeps the v1.x dependency set and pins.
+set(IC4EXT_D3D11HELPER_GIT_TAG "v1.12.1" CACHE STRING "D3D11Helper Git ref")
+set(IC4EXT_D3D12HELPER_GIT_TAG "v1.12.1" CACHE STRING "D3D12Helper Git ref")
+set(IC4EXT_THREADKIT_GIT_TAG "main" CACHE STRING "ThreadKit Git ref")
+set(IC4EXT_NLOHMANN_JSON_GIT_TAG "v3.11.3" CACHE STRING "nlohmann/json Git ref")
 
 # -----------------------------------------------------------------------------
 # DirectX Shader Compiler runtime discovery
 # -----------------------------------------------------------------------------
-# D3D11Helper/D3D12Helper can copy dxcompiler.dll/dxil.dll next to their
-# samples/tests, but their subprojects search relative to their own source dir.
-# When users run:
-#   nuget install Microsoft.Direct3D.DXC -OutputDirectory packages
-# from the IC4Ext root, the package is under IC4Ext/packages and would otherwise
-# be missed. Resolve it once at the top-level and pass it down to both helpers.
-set(IC4EXT_DXC_RUNTIME_DIR "" CACHE PATH "Directory that contains dxcompiler.dll and dxil.dll. Overrides auto-detection.")
+set(IC4EXT_DXC_RUNTIME_DIR "" CACHE PATH "Directory containing dxcompiler.dll and dxil.dll")
 
 function(ic4ext_find_dxc_runtime_dir out_var)
     if(IC4EXT_DXC_RUNTIME_DIR)
@@ -100,37 +87,28 @@ function(ic4ext_find_dxc_runtime_dir out_var)
             return()
         endif()
     endforeach()
-
     set(${out_var} "" PARENT_SCOPE)
 endfunction()
 
 ic4ext_find_dxc_runtime_dir(IC4EXT_RESOLVED_DXC_RUNTIME_DIR)
 if(IC4EXT_RESOLVED_DXC_RUNTIME_DIR)
     message(STATUS "IC4Ext: found DXC runtime: ${IC4EXT_RESOLVED_DXC_RUNTIME_DIR}")
-    set(D3D11HELPER_DXC_RUNTIME_DIR "${IC4EXT_RESOLVED_DXC_RUNTIME_DIR}" CACHE PATH "Directory that contains dxcompiler.dll and dxil.dll" FORCE)
-    set(D3D12HELPER_DXC_RUNTIME_DIR "${IC4EXT_RESOLVED_DXC_RUNTIME_DIR}" CACHE PATH "Directory that contains dxcompiler.dll and dxil.dll" FORCE)
+    set(D3D11HELPER_DXC_RUNTIME_DIR "${IC4EXT_RESOLVED_DXC_RUNTIME_DIR}" CACHE PATH "DXC runtime" FORCE)
+    set(D3D12HELPER_DXC_RUNTIME_DIR "${IC4EXT_RESOLVED_DXC_RUNTIME_DIR}" CACHE PATH "DXC runtime" FORCE)
 else()
-    message(WARNING "IC4Ext: DXC runtime was not found. If helper samples/tests need DXC, run 'nuget install Microsoft.Direct3D.DXC -OutputDirectory packages' in the IC4Ext root or pass -DIC4EXT_DXC_RUNTIME_DIR=path/to/bin/x64.")
+    message(WARNING "IC4Ext: DXC runtime was not found. Pass -DIC4EXT_DXC_RUNTIME_DIR=path/to/bin/x64 when required.")
 endif()
 
 # -----------------------------------------------------------------------------
 # nlohmann/json
 # -----------------------------------------------------------------------------
-# Do not FetchContent the full nlohmann/json repository on Windows. The repo
-# contains very long test/report file names that can exceed MAX_PATH when this
-# project is placed under a nested Downloads path. IC4Ext only needs the single
-# public header, so fetch that file directly and expose the normal
-# nlohmann_json::nlohmann_json interface target.
 set(IC4EXT_NLOHMANN_JSON_SINGLE_HEADER_URL
     "https://raw.githubusercontent.com/nlohmann/json/${IC4EXT_NLOHMANN_JSON_GIT_TAG}/single_include/nlohmann/json.hpp"
-    CACHE STRING "URL used when fetching the nlohmann/json single header")
+    CACHE STRING "URL used when fetching nlohmann/json single header")
 
 if(IC4EXT_FETCH_DEPENDENCIES AND IC4EXT_FETCH_NLOHMANN_JSON)
-    set(IC4EXT_NLOHMANN_JSON_SINGLE_INCLUDE_DIR
-        "${CMAKE_BINARY_DIR}/_deps/nlohmann_json_single/include")
-    set(IC4EXT_NLOHMANN_JSON_SINGLE_HEADER
-        "${IC4EXT_NLOHMANN_JSON_SINGLE_INCLUDE_DIR}/nlohmann/json.hpp")
-
+    set(IC4EXT_NLOHMANN_JSON_SINGLE_INCLUDE_DIR "${CMAKE_BINARY_DIR}/_deps/nlohmann_json_single/include")
+    set(IC4EXT_NLOHMANN_JSON_SINGLE_HEADER "${IC4EXT_NLOHMANN_JSON_SINGLE_INCLUDE_DIR}/nlohmann/json.hpp")
     if(NOT EXISTS "${IC4EXT_NLOHMANN_JSON_SINGLE_HEADER}")
         message(STATUS "Fetching nlohmann/json single header: ${IC4EXT_NLOHMANN_JSON_GIT_TAG}")
         file(MAKE_DIRECTORY "${IC4EXT_NLOHMANN_JSON_SINGLE_INCLUDE_DIR}/nlohmann")
@@ -144,25 +122,18 @@ if(IC4EXT_FETCH_DEPENDENCIES AND IC4EXT_FETCH_NLOHMANN_JSON)
         list(GET IC4EXT_NLOHMANN_JSON_DOWNLOAD_STATUS 1 IC4EXT_NLOHMANN_JSON_DOWNLOAD_MESSAGE)
         if(NOT IC4EXT_NLOHMANN_JSON_DOWNLOAD_CODE EQUAL 0)
             file(REMOVE "${IC4EXT_NLOHMANN_JSON_SINGLE_HEADER}")
-            message(FATAL_ERROR
-                "Failed to download nlohmann/json single header: "
-                "${IC4EXT_NLOHMANN_JSON_DOWNLOAD_MESSAGE}. "
-                "Either enable internet access, pass -DIC4EXT_FETCH_NLOHMANN_JSON=OFF "
-                "and provide nlohmann_json via find_package, or set "
-                "IC4EXT_NLOHMANN_JSON_SINGLE_HEADER_URL to a reachable json.hpp URL.")
+            message(FATAL_ERROR "Failed to download nlohmann/json: ${IC4EXT_NLOHMANN_JSON_DOWNLOAD_MESSAGE}")
         endif()
     endif()
-
     add_library(nlohmann_json INTERFACE)
     add_library(nlohmann_json::nlohmann_json ALIAS nlohmann_json)
-    target_include_directories(nlohmann_json INTERFACE
-        "${IC4EXT_NLOHMANN_JSON_SINGLE_INCLUDE_DIR}")
+    target_include_directories(nlohmann_json INTERFACE "${IC4EXT_NLOHMANN_JSON_SINGLE_INCLUDE_DIR}")
 else()
     find_package(nlohmann_json CONFIG REQUIRED)
 endif()
 
 # -----------------------------------------------------------------------------
-# D3D11Helper, only when D3D11 backend is enabled
+# Helper dependencies
 # -----------------------------------------------------------------------------
 set(IC4EXT_D3D11HELPER_SOURCE_DIR "")
 if(IC4EXT_ENABLE_D3D11)
@@ -175,20 +146,15 @@ if(IC4EXT_ENABLE_D3D11)
             add_subdirectory("${D3D11HELPER_ROOT}" "${CMAKE_BINARY_DIR}/_deps/D3D11Helper-local-build" EXCLUDE_FROM_ALL)
         endif()
     elseif(IC4EXT_FETCH_DEPENDENCIES AND IC4EXT_FETCH_D3D11HELPER)
-        FetchContent_Declare(
-            D3D11Helper
+        FetchContent_Declare(D3D11Helper
             GIT_REPOSITORY https://github.com/Isasa2357/D3D11Helper.git
-            GIT_TAG        ${IC4EXT_D3D11HELPER_GIT_TAG}
-            GIT_SHALLOW    TRUE
-        )
+            GIT_TAG ${IC4EXT_D3D11HELPER_GIT_TAG}
+            GIT_SHALLOW TRUE)
         FetchContent_MakeAvailable(D3D11Helper)
         set(IC4EXT_D3D11HELPER_SOURCE_DIR "${d3d11helper_SOURCE_DIR}")
     endif()
 endif()
 
-# -----------------------------------------------------------------------------
-# D3D12Helper, only when D3D12 backend is enabled
-# -----------------------------------------------------------------------------
 set(IC4EXT_D3D12HELPER_SOURCE_DIR "")
 if(IC4EXT_ENABLE_D3D12)
     set(D3D12HELPER_BUILD_SAMPLES OFF CACHE BOOL "" FORCE)
@@ -201,20 +167,15 @@ if(IC4EXT_ENABLE_D3D12)
             add_subdirectory("${D3D12HELPER_ROOT}" "${CMAKE_BINARY_DIR}/_deps/D3D12Helper-local-build" EXCLUDE_FROM_ALL)
         endif()
     elseif(IC4EXT_FETCH_DEPENDENCIES AND IC4EXT_FETCH_D3D12HELPER)
-        FetchContent_Declare(
-            D3D12Helper
+        FetchContent_Declare(D3D12Helper
             GIT_REPOSITORY https://github.com/Isasa2357/D3D12Helper.git
-            GIT_TAG        ${IC4EXT_D3D12HELPER_GIT_TAG}
-            GIT_SHALLOW    TRUE
-        )
+            GIT_TAG ${IC4EXT_D3D12HELPER_GIT_TAG}
+            GIT_SHALLOW TRUE)
         FetchContent_MakeAvailable(D3D12Helper)
         set(IC4EXT_D3D12HELPER_SOURCE_DIR "${d3d12helper_SOURCE_DIR}")
     endif()
 endif()
 
-# -----------------------------------------------------------------------------
-# ThreadKit
-# -----------------------------------------------------------------------------
 set(IC4EXT_THREADKIT_SOURCE_DIR "")
 if(THREADKIT_ROOT)
     set(IC4EXT_THREADKIT_SOURCE_DIR "${THREADKIT_ROOT}")
@@ -226,20 +187,20 @@ if(THREADKIT_ROOT)
 elseif(IC4EXT_FETCH_DEPENDENCIES AND IC4EXT_FETCH_THREADKIT)
     set(THREADKIT_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
     set(THREADKIT_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-    FetchContent_Declare(
-        ThreadKit
+    FetchContent_Declare(ThreadKit
         GIT_REPOSITORY https://github.com/Isasa2357/ThreadKit.git
-        GIT_TAG        ${IC4EXT_THREADKIT_GIT_TAG}
-        GIT_SHALLOW    TRUE
-    )
+        GIT_TAG ${IC4EXT_THREADKIT_GIT_TAG}
+        GIT_SHALLOW TRUE)
     FetchContent_MakeAvailable(ThreadKit)
     set(IC4EXT_THREADKIT_SOURCE_DIR "${threadkit_SOURCE_DIR}")
 endif()
 
+# -----------------------------------------------------------------------------
+# Library
+# -----------------------------------------------------------------------------
 set(IC4EXT_SOURCES
     src/Core/Config.cpp
-    src/Core/CpuFrame.cpp
-)
+    src/Core/CpuFrame.cpp)
 
 if(IC4EXT_ENABLE_D3D11)
     list(APPEND IC4EXT_SOURCES
@@ -252,8 +213,7 @@ if(IC4EXT_ENABLE_D3D11)
         src/D3D11/D3D11DummyCameraCaptureGenerator.cpp
         src/D3D11/D3D11CameraCapture.cpp
         src/D3D11/D3D11CameraCaptureThread.cpp
-        src/D3D11/D3D11FrameSyncThread.cpp
-    )
+        src/D3D11/D3D11FrameSyncThread.cpp)
 endif()
 
 if(IC4EXT_ENABLE_D3D12)
@@ -268,23 +228,21 @@ if(IC4EXT_ENABLE_D3D12)
         src/D3D12/D3D12CameraCapture.cpp
         src/D3D12/D3D12CameraCaptureThread.cpp
         src/D3D12/D3D12FrameSyncThread.cpp
-    )
+        src/V2/D3D12/D3D12ReadOnlyFrame.cpp
+        src/V2/D3D12/D3D12FramePool.cpp
+        src/V2/D3D12/D3D12ReadOnlyFrameSet.cpp
+        src/V2/D3D12/D3D12FrameSyncThread.cpp)
 endif()
 
 add_library(IC4Ext STATIC ${IC4EXT_SOURCES})
 add_library(IC4Ext::IC4Ext ALIAS IC4Ext)
-
 target_compile_features(IC4Ext PUBLIC cxx_std_17)
 target_include_directories(IC4Ext PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    $<INSTALL_INTERFACE:include>
-)
-
+    $<INSTALL_INTERFACE:include>)
 target_compile_definitions(IC4Ext PUBLIC
     IC4EXT_ENABLE_D3D11=$<IF:$<BOOL:${IC4EXT_ENABLE_D3D11}>,1,0>
-    IC4EXT_ENABLE_D3D12=$<IF:$<BOOL:${IC4EXT_ENABLE_D3D12}>,1,0>
-)
-
+    IC4EXT_ENABLE_D3D12=$<IF:$<BOOL:${IC4EXT_ENABLE_D3D12}>,1,0>)
 target_link_libraries(IC4Ext PUBLIC nlohmann_json::nlohmann_json)
 
 if(NOT WIN32)
@@ -295,14 +253,14 @@ if(IC4_SDK_ROOT)
     target_include_directories(IC4Ext PUBLIC "${IC4_SDK_ROOT}/include")
     target_link_directories(IC4Ext PUBLIC "${IC4_SDK_ROOT}/lib/x64")
 else()
-    message(WARNING "IC4_SDK_ROOT is empty and IC4PATH was not available. Configure with -DIC4_SDK_ROOT=%IC4PATH% or set the IC4PATH environment variable to build against IC4 SDK.")
+    message(WARNING "IC4_SDK_ROOT is empty. Configure it or set IC4PATH to build against IC4 SDK.")
 endif()
 
 if(IC4EXT_ENABLE_D3D11)
     if(IC4EXT_D3D11HELPER_SOURCE_DIR)
         target_include_directories(IC4Ext PUBLIC "${IC4EXT_D3D11HELPER_SOURCE_DIR}/include")
     else()
-        message(WARNING "D3D11 backend is enabled, but D3D11Helper source directory is empty. Set D3D11HELPER_ROOT or enable IC4EXT_FETCH_D3D11HELPER.")
+        message(WARNING "D3D11 backend enabled without D3D11Helper source directory")
     endif()
 endif()
 
@@ -310,18 +268,16 @@ if(IC4EXT_ENABLE_D3D12)
     if(IC4EXT_D3D12HELPER_SOURCE_DIR)
         target_include_directories(IC4Ext PUBLIC "${IC4EXT_D3D12HELPER_SOURCE_DIR}/include")
     else()
-        message(WARNING "D3D12 backend is enabled, but D3D12Helper source directory is empty. Set D3D12HELPER_ROOT or enable IC4EXT_FETCH_D3D12HELPER.")
+        message(WARNING "D3D12 backend enabled without D3D12Helper source directory")
     endif()
 endif()
 
 if(IC4EXT_THREADKIT_SOURCE_DIR)
     target_include_directories(IC4Ext PUBLIC "${IC4EXT_THREADKIT_SOURCE_DIR}/include")
 else()
-    message(WARNING "ThreadKit source directory is empty. Set THREADKIT_ROOT or enable IC4EXT_FETCH_THREADKIT.")
+    message(WARNING "ThreadKit source directory is empty")
 endif()
 
-# Link helper targets if the fetched/local projects define them. Include dirs above are
-# still added so header-only or differently named helper CMake projects remain usable.
 if(IC4EXT_ENABLE_D3D11)
     if(TARGET D3D11Helper::D3D11Helper)
         target_link_libraries(IC4Ext PUBLIC D3D11Helper::D3D11Helper)
