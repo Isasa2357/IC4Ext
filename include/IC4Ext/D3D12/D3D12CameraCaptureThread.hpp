@@ -244,6 +244,7 @@ private:
 
     mutable std::mutex outputMutex_;
     std::vector<OutputBinding> outputs_;
+    std::uint64_t dispatchedFrameCount_ = 0;
 
     mutable std::mutex statsMutex_;
     CameraThreadStats stats_;
