@@ -4,11 +4,24 @@
 #include <cassert>
 #include <chrono>
 #include <cstdint>
+#include <exception>
 #include <iostream>
 #include <memory>
+#include <thread>
 #include <vector>
 
 namespace {
+
+template <class Predicate>
+bool WaitUntil(Predicate&& predicate, std::chrono::milliseconds timeout)
+{
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (predicate()) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return predicate();
+}
 
 IC4Ext::D3D11CameraFrame MakeFrame(D3D11CoreLib::D3D11Core& core)
 {
@@ -37,7 +50,8 @@ IC4Ext::D3D11CameraFrame MakeFrame(D3D11CoreLib::D3D11Core& core)
     init.SysMemPitch = width * 4u;
 
     IC4Ext::D3D11CameraFrame frame;
-    const HRESULT hr = core.GetDevice()->CreateTexture2D(&desc, &init, &frame.texture);
+    const HRESULT hr = core.GetDevice()->CreateTexture2D(
+        &desc, &init, frame.texture.GetAddressOf());
     if (FAILED(hr)) return {};
     frame.timing.frameNumber = 42;
     frame.timing.deviceTimestampNs = 123456;
@@ -129,6 +143,12 @@ int main()
     assert(outputA->frame.ready.wait(INFINITE));
     assert(outputB->frame.ready.wait(INFINITE));
 
+    assert(WaitUntil(
+        [&captureThread] {
+            const auto stats = captureThread.stats();
+            return stats.resizedFrames == 2 && stats.pushedFrames == 3;
+        },
+        std::chrono::seconds(1)));
     const auto stats = captureThread.stats();
     assert(stats.resizedFrames == 2);
     assert(stats.resizeFailures == 0);
