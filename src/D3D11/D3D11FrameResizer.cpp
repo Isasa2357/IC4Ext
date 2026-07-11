@@ -88,6 +88,7 @@ bool D3D11FrameResizer::resizeFrame(const D3D11CameraFrame& src,
         dst.texture = outputResource.AsTexture2D();
         dst.srv = D3D11CoreLib::CreateTexture2DSrv(*core_, outputResource, srcDesc.Format);
         dst.uav = D3D11CoreLib::CreateTexture2DUav(*core_, outputResource, srcDesc.Format);
+        dst.processingSourceKeepAlive = src.texture;
 
         D3D11CoreLib::Processing::ResizeDesc desc{};
         desc.filter = options.filter == CameraOutputResizeFilter::Point
