@@ -57,6 +57,14 @@ int main()
     assert(captureThread.start());
     assert(captureThread.outputQueueCount() == 0);
 
+    auto invalidOutput = std::make_shared<IC4Ext::D3D12IndexedFrameQueue>(queueOptions);
+    captureThread.addOutputQueue(
+        99,
+        invalidOutput,
+        IC4Ext::CameraOutputResizeOptions{2, 0, IC4Ext::CameraOutputResizeFilter::Linear});
+    assert(captureThread.outputQueueCount() == 0);
+    assert(captureThread.lastError().code == static_cast<int>(IC4Ext::ErrorCode::InvalidArgument));
+
     auto output1 = std::make_shared<IC4Ext::D3D12IndexedFrameQueue>(queueOptions);
 
     // The same binding may be registered more than once. Removal deletes all
@@ -68,8 +76,8 @@ int main()
     assert(captureThread.outputQueueCount() == 0);
     assert(captureThread.removeOutputQueue(7, output1) == 0);
 
-    // Register after the worker has already started.
-    captureThread.addOutputQueue(7, output1);
+    // Register after the worker has already started. Explicit empty resize is passthrough.
+    captureThread.addOutputQueue(7, output1, {});
     assert(captureThread.outputQueueCount() == 1);
 
     sourceQueue->push(MakeFrame(1));
