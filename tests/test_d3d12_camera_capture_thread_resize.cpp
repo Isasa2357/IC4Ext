@@ -8,8 +8,20 @@
 #include <exception>
 #include <iostream>
 #include <memory>
+#include <thread>
 
 namespace {
+
+template <class Predicate>
+bool WaitUntil(Predicate&& predicate, std::chrono::milliseconds timeout)
+{
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (predicate()) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return predicate();
+}
 
 IC4Ext::D3D12CameraFrame MakeFrame(D3D12CoreLib::D3D12Core& core)
 {
@@ -121,6 +133,12 @@ int main()
     assert(outputA->frame.ready.wait(INFINITE));
     assert(outputB->frame.ready.wait(INFINITE));
 
+    assert(WaitUntil(
+        [&captureThread] {
+            const auto stats = captureThread.stats();
+            return stats.resizedFrames == 2 && stats.pushedFrames == 3;
+        },
+        std::chrono::seconds(1)));
     const auto stats = captureThread.stats();
     assert(stats.resizedFrames == 2);
     assert(stats.resizeFailures == 0);
