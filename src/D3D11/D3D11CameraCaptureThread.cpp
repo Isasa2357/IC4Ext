@@ -1,4 +1,5 @@
 #include "IC4Ext/D3D11/D3D11CameraCaptureThread.hpp"
+#include "D3D11FrameResizer.hpp"
 
 #include <chrono>
 #include <utility>
@@ -44,9 +45,25 @@ D3D11CameraCaptureThread::D3D11CameraCaptureThread(D3D11CameraCapture&& capture,
     source_ = ownedCapture_;
 }
 
+D3D11CameraCaptureThread::D3D11CameraCaptureThread(D3D11CameraCapture&& capture,
+                                                   D3D11CoreLib::D3D11Core* core,
+                                                   CameraThreadOptions options)
+    : core_(core), options_(options), sourceMode_(SourceMode::MovedCapture)
+{
+    ownedCapture_ = std::make_shared<D3D11CameraCapture>(std::move(capture));
+    source_ = ownedCapture_;
+}
+
 D3D11CameraCaptureThread::D3D11CameraCaptureThread(std::shared_ptr<ID3D11Camera> source,
                                                    CameraThreadOptions options)
     : options_(options), sourceMode_(SourceMode::ExternalSource), source_(std::move(source))
+{
+}
+
+D3D11CameraCaptureThread::D3D11CameraCaptureThread(std::shared_ptr<ID3D11Camera> source,
+                                                   D3D11CoreLib::D3D11Core* core,
+                                                   CameraThreadOptions options)
+    : core_(core), options_(options), sourceMode_(SourceMode::ExternalSource), source_(std::move(source))
 {
 }
 
@@ -90,16 +107,6 @@ bool D3D11CameraCaptureThread::open()
                 return false;
             }
         }
-
-        copyFenceManager_ = std::make_unique<D3D11FenceManager>();
-        if (!copyFenceManager_->initialize(core_->GetDevice(), core_->GetImmediateContext())) {
-            lastError_ = copyFenceManager_->lastError();
-            return false;
-        }
-        if (!copier_.initialize(core_->GetDevice(), core_->GetImmediateContext(), copyFenceManager_.get())) {
-            lastError_ = copier_.lastError();
-            return false;
-        }
     } else if (sourceMode_ == SourceMode::MovedCapture) {
         if (!source_->isOpened()) {
             setError(ErrorCode::InvalidArgument, "D3D11CameraCaptureThread::open", "Moved capture is not opened");
@@ -108,6 +115,18 @@ bool D3D11CameraCaptureThread::open()
     } else {
         if (!source_->isOpened()) {
             setError(ErrorCode::NotOpened, "D3D11CameraCaptureThread::open", "External camera source is not opened");
+            return false;
+        }
+    }
+
+    if (core_ && !copyFenceManager_) {
+        copyFenceManager_ = std::make_unique<D3D11FenceManager>();
+        if (!copyFenceManager_->initialize(core_->GetDevice(), core_->GetImmediateContext())) {
+            lastError_ = copyFenceManager_->lastError();
+            return false;
+        }
+        if (!copier_.initialize(core_, copyFenceManager_.get())) {
+            lastError_ = copier_.lastError();
             return false;
         }
     }
@@ -147,12 +166,55 @@ void D3D11CameraCaptureThread::stopAndJoin()
 void D3D11CameraCaptureThread::addOutputQueue(std::uint32_t cameraIndex,
                                               std::shared_ptr<D3D11IndexedFrameQueue> queue)
 {
+    addOutputQueue(cameraIndex, std::move(queue), {});
+}
+
+void D3D11CameraCaptureThread::addOutputQueue(
+    std::uint32_t cameraIndex,
+    std::shared_ptr<D3D11IndexedFrameQueue> queue,
+    CameraOutputResizeOptions resize)
+{
     if (!queue) {
         setError(ErrorCode::InvalidArgument, "D3D11CameraCaptureThread::addOutputQueue", "queue is null");
         return;
     }
+    if (!resize.isValid()) {
+        setError(ErrorCode::InvalidArgument,
+                 "D3D11CameraCaptureThread::addOutputQueue",
+                 "resize width and height must both be zero or both be non-zero");
+        return;
+    }
     std::lock_guard<std::mutex> lock(outputMutex_);
-    outputs_.push_back(OutputBinding{cameraIndex, std::move(queue)});
+    outputs_.push_back(OutputBinding{cameraIndex, std::move(queue), resize});
+}
+
+bool D3D11CameraCaptureThread::ensureResizer()
+{
+    if (resizer_) return true;
+    if (!core_) {
+        setError(ErrorCode::InvalidArgument,
+                 "D3D11CameraCaptureThread::ensureResizer",
+                 "D3D11Core is required for output-queue resize");
+        return false;
+    }
+    if (!copyFenceManager_) {
+        copyFenceManager_ = std::make_unique<D3D11FenceManager>();
+        if (!copyFenceManager_->initialize(core_->GetDevice(), core_->GetImmediateContext())) {
+            lastError_ = copyFenceManager_->lastError();
+            return false;
+        }
+        if (!copier_.initialize(core_, copyFenceManager_.get())) {
+            lastError_ = copier_.lastError();
+            return false;
+        }
+    }
+    auto candidate = std::make_unique<D3D11FrameResizer>();
+    if (!candidate->initialize(core_, copyFenceManager_.get(), options_.outputProcessingShaderDirectory)) {
+        lastError_ = candidate->lastError();
+        return false;
+    }
+    resizer_ = std::move(candidate);
+    return true;
 }
 
 bool D3D11CameraCaptureThread::applyIC4StateJson(const std::filesystem::path& jsonPath,
@@ -396,24 +458,55 @@ void D3D11CameraCaptureThread::dispatchFrame(D3D11CameraFrame&& frame)
         return;
     }
 
-    if (outputs.size() == 1 || !options_.copyPerOutputQueue) {
-        auto res = outputs.front().queue->push(D3D11IndexedCameraFrame{outputs.front().cameraIndex, std::move(frame)});
+    std::vector<std::size_t> passthroughIndices;
+    passthroughIndices.reserve(outputs.size());
+
+    for (std::size_t i = 0; i < outputs.size(); ++i) {
+        const auto& output = outputs[i];
+        if (!output.resize.enabled()) {
+            passthroughIndices.push_back(i);
+            continue;
+        }
+
+        D3D11CameraFrame resized;
+        if (!ensureResizer() || !resizer_->resizeFrame(frame, output.resize, resized)) {
+            std::lock_guard<std::mutex> lock(statsMutex_);
+            ++stats_.resizeFailures;
+            if (resizer_) lastError_ = resizer_->lastError();
+            continue;
+        }
+
+        const auto result = output.queue->push(
+            D3D11IndexedCameraFrame{output.cameraIndex, std::move(resized)});
         std::lock_guard<std::mutex> lock(statsMutex_);
-        if (IsQueuePushSucceeded(res)) ++stats_.pushedFrames;
+        ++stats_.resizedFrames;
+        if (IsQueuePushSucceeded(result)) ++stats_.pushedFrames;
+        else ++stats_.pushFailures;
+    }
+
+    if (passthroughIndices.empty()) return;
+
+    if (!options_.copyPerOutputQueue) {
+        const auto& output = outputs[passthroughIndices.front()];
+        const auto result = output.queue->push(
+            D3D11IndexedCameraFrame{output.cameraIndex, std::move(frame)});
+        std::lock_guard<std::mutex> lock(statsMutex_);
+        if (IsQueuePushSucceeded(result)) ++stats_.pushedFrames;
         else ++stats_.pushFailures;
         return;
     }
 
-    if (!copyFenceManager_) {
+    if (passthroughIndices.size() > 1 && !copyFenceManager_) {
         std::lock_guard<std::mutex> lock(statsMutex_);
         ++stats_.copyFailures;
         lastError_ = MakeError(ErrorCode::ThreadError,
                                "D3D11CameraCaptureThread::dispatchFrame",
-                               "Multiple output queues require an internally opened real capture thread so frame copies can be fenced");
+                               "Multiple passthrough outputs require D3D11Core so frame copies can be fenced");
         return;
     }
 
-    for (std::size_t i = 0; i + 1 < outputs.size(); ++i) {
+    for (std::size_t i = 0; i + 1 < passthroughIndices.size(); ++i) {
+        const auto& output = outputs[passthroughIndices[i]];
         D3D11CameraFrame copied;
         if (!copier_.copyFrame(frame, copied)) {
             std::lock_guard<std::mutex> lock(statsMutex_);
@@ -421,17 +514,19 @@ void D3D11CameraCaptureThread::dispatchFrame(D3D11CameraFrame&& frame)
             lastError_ = copier_.lastError();
             continue;
         }
-        auto res = outputs[i].queue->push(D3D11IndexedCameraFrame{outputs[i].cameraIndex, std::move(copied)});
+        const auto result = output.queue->push(
+            D3D11IndexedCameraFrame{output.cameraIndex, std::move(copied)});
         std::lock_guard<std::mutex> lock(statsMutex_);
         ++stats_.copiedFrames;
-        if (IsQueuePushSucceeded(res)) ++stats_.pushedFrames;
+        if (IsQueuePushSucceeded(result)) ++stats_.pushedFrames;
         else ++stats_.pushFailures;
     }
 
-    auto& last = outputs.back();
-    auto res = last.queue->push(D3D11IndexedCameraFrame{last.cameraIndex, std::move(frame)});
+    const auto& last = outputs[passthroughIndices.back()];
+    const auto result = last.queue->push(
+        D3D11IndexedCameraFrame{last.cameraIndex, std::move(frame)});
     std::lock_guard<std::mutex> lock(statsMutex_);
-    if (IsQueuePushSucceeded(res)) ++stats_.pushedFrames;
+    if (IsQueuePushSucceeded(result)) ++stats_.pushedFrames;
     else ++stats_.pushFailures;
 }
 
