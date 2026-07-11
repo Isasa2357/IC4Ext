@@ -1,6 +1,6 @@
 #include "D3D12FrameResizer.hpp"
 
-#include <D3D12Helper/D3D12Gpu/D3D12Helpers.hpp>
+#include <D3D12Helper/D3D12Framework/D3D12Helpers.hpp>
 #include <D3D12Helper/D3D12Gpu/D3D12ResourceView.hpp>
 
 #include <exception>
