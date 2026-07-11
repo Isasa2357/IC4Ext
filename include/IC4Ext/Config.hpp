@@ -8,6 +8,14 @@
 #include <variant>
 #include <vector>
 
+#ifndef IC4EXT_DEFAULT_COPIED_OUTPUT_FRAME_STRIDE
+#define IC4EXT_DEFAULT_COPIED_OUTPUT_FRAME_STRIDE 1
+#endif
+
+#ifndef IC4EXT_DEFAULT_COPIED_OUTPUT_FRAME_BURST
+#define IC4EXT_DEFAULT_COPIED_OUTPUT_FRAME_BURST 1
+#endif
+
 namespace IC4Ext {
 
 enum class CameraPixelFormat : std::uint32_t
@@ -177,6 +185,19 @@ struct CameraThreadOptions
     std::uint32_t readTimeoutMs = 1000;
     bool copyPerOutputQueue = true;
     bool stopOnReadError = false;
+
+    // When more than one output queue is registered, all queues except the last
+    // receive copied frames. A stride larger than one skips those copied outputs
+    // for most source frames while the last queue still receives every original
+    // frame. This keeps a latency-sensitive primary consumer at full rate.
+    std::uint32_t copiedOutputFrameStride =
+        IC4EXT_DEFAULT_COPIED_OUTPUT_FRAME_STRIDE;
+
+    // Number of consecutive copied-output frames emitted at the beginning of
+    // each stride. A short burst improves multi-camera pairing when the camera
+    // phases differ by one or more source frames.
+    std::uint32_t copiedOutputFrameBurst =
+        IC4EXT_DEFAULT_COPIED_OUTPUT_FRAME_BURST;
 };
 
 enum class FrameSyncPolicy : std::uint32_t
@@ -222,10 +243,10 @@ bool ParseCameraPixelFormat(const std::string& text, CameraPixelFormat& out) noe
 
 CameraSyncConfig MakeNoSyncConfig(std::string triggerSelector = "FrameStart");
 CameraSyncConfig MakeHardwareTriggerSyncConfig(std::string triggerSource = "Line1",
-                                               std::string triggerSelector = "FrameStart",
-                                               std::string triggerActivation = "RisingEdge");
+                                                std::string triggerSelector = "FrameStart",
+                                                std::string triggerActivation = "RisingEdge");
 CameraSyncConfig MakeSoftwareTriggerSyncConfig(std::string triggerSelector = "FrameStart",
-                                               std::string softwareTriggerCommand = "TriggerSoftware");
+                                                std::string softwareTriggerCommand = "TriggerSoftware");
 
 // Materializes sync configuration into CameraCaptureConfig::propertyOverrides.
 // Call this before open()/D3D*CameraCaptureThread::start(). Existing overrides
