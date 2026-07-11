@@ -12,6 +12,7 @@
 #include <D3D11Helper/D3D11Core/D3D11Core.hpp>
 
 #include <atomic>
+#include <cstddef>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -47,6 +48,41 @@ public:
 
     void addOutputQueue(std::uint32_t cameraIndex,
                         std::shared_ptr<D3D11IndexedFrameQueue> queue);
+
+    std::size_t removeOutputQueue(
+        std::uint32_t cameraIndex,
+        const std::shared_ptr<D3D11IndexedFrameQueue>& queue)
+    {
+        if (!queue) {
+            return 0;
+        }
+
+        std::lock_guard<std::mutex> lock(outputMutex_);
+        std::size_t removedCount = 0;
+        for (auto it = outputs_.begin(); it != outputs_.end();) {
+            if (it->cameraIndex == cameraIndex && it->queue == queue) {
+                it = outputs_.erase(it);
+                ++removedCount;
+            } else {
+                ++it;
+            }
+        }
+        return removedCount;
+    }
+
+    std::size_t clearOutputQueues()
+    {
+        std::lock_guard<std::mutex> lock(outputMutex_);
+        const std::size_t removedCount = outputs_.size();
+        outputs_.clear();
+        return removedCount;
+    }
+
+    std::size_t outputQueueCount() const
+    {
+        std::lock_guard<std::mutex> lock(outputMutex_);
+        return outputs_.size();
+    }
 
     bool applyIC4StateJson(const std::filesystem::path& jsonPath,
                            std::size_t deviceIndex = 0,

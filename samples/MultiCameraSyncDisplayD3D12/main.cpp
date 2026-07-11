@@ -673,7 +673,7 @@ int main(int argc, char** argv)
                                            : 30u;
             description.frameRateDen = 1;
             description.backend =
-                D3DVideoEncoderLib::D3D12VideoEncoderBackendType::D3D12VideoEncode;
+                D3DVideoEncoderLib::D3DVideoEncoderBackendType::D3D12VideoEncode;
             description.codec = D3DVideoEncoderLib::VideoCodec::H264;
             description.internalFormat = D3DVideoEncoderLib::VideoPixelFormat::NV12;
             description.bitrate = static_cast<std::uint32_t>(options.recordBitrate);
