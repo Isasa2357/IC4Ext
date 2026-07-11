@@ -34,6 +34,7 @@ struct CameraOutputResizeOptions
 - `width > 0 && height > 0`: GPU resize to the requested dimensions.
 - Only one dimension being zero is invalid; the queue is not registered.
 - `Point` and `Linear` filters are available.
+- The image is stretched directly to the requested dimensions; aspect ratio is not preserved automatically.
 
 ## Dispatch behavior
 
@@ -45,12 +46,16 @@ Timing and chunk metadata are preserved. `FrameFormatMetadata::width` and `heigh
 
 Passthrough outputs retain the existing copy behavior controlled by `CameraThreadOptions::copyPerOutputQueue`. Resized outputs are independent textures and are still produced when `copyPerOutputQueue` is false.
 
+When passthrough and resized outputs coexist, the original frame's ready token is advanced to the final resize completion fence. A passthrough consumer that waits the ready token therefore cannot overwrite or reuse the source texture while a resize operation is still reading it.
+
 ## Backend implementation
 
 - D3D11 uses `D3D11Helper` v1.13 `D3D11Resizer::DispatchResizeView`.
 - D3D12 uses `D3D12Helper` v1.13 `D3D12Resizer::RecordResizeView` with explicit before/after resource states.
 - Borrowed source resources are passed through the helpers' non-owning resource-view APIs.
+- Source resources and source-submission keep-alive objects remain referenced until the resized output fence completes.
 - The current implementation supports `GpuFrameFormat::RGBA8` / `DXGI_FORMAT_R8G8B8A8_UNORM` for resized outputs.
+- D3D11 resize requires a source texture created with shader-resource bind support. IC4Ext's default `FrameOutputSpec::createSrv = true` satisfies this requirement.
 - Passthrough remains available for other output formats.
 
 `CameraThreadOptions::outputProcessingShaderDirectory` may override the helper Processing shader directory. When empty, the helper's default runtime search path is used.
