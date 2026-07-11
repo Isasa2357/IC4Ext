@@ -7,6 +7,13 @@
 
 namespace IC4Ext {
 
+D3D11FrameResizer::~D3D11FrameResizer()
+{
+    if (lastInFlight_.isValid()) {
+        lastInFlight_.wait(INFINITE);
+    }
+}
+
 void D3D11FrameResizer::setError(ErrorCode code, const char* where, const std::string& message)
 {
     lastError_ = MakeError(code, where, message);
@@ -108,6 +115,7 @@ bool D3D11FrameResizer::resizeFrame(D3D11CameraFrame& src,
                      fenceManager_->lastError().message);
             return false;
         }
+        lastInFlight_ = dst.ready;
 
         // Passthrough consumers of the original source must also wait until the
         // resize read has completed before they may reuse or overwrite it.
