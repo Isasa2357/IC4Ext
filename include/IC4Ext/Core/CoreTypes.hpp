@@ -141,6 +141,8 @@ struct CameraThreadStats
     std::uint64_t pushFailures = 0;
     std::uint64_t copiedFrames = 0;
     std::uint64_t copyFailures = 0;
+    std::uint64_t resizedFrames = 0;
+    std::uint64_t resizeFailures = 0;
     std::uint64_t noOutputDrops = 0;
 };
 
