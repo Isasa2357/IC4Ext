@@ -60,7 +60,10 @@ struct D3D12FramePoolStats
     std::uint64_t waitTimeouts = 0;
 
     std::size_t inFlight() const noexcept { return writing + published; }
-    bool exhausted() const noexcept { return available == 0 && capacity >= maxCapacity; }
+    bool exhausted() const noexcept
+    {
+        return maxCapacity != 0 && available == 0 && capacity >= maxCapacity;
+    }
     double availableRatio() const noexcept
     {
         return capacity == 0 ? 0.0 : static_cast<double>(available) / static_cast<double>(capacity);
