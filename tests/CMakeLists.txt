@@ -59,7 +59,7 @@ if(IC4EXT_ENABLE_D3D12)
     set_tests_properties(test_d3d12_frame_readback PROPERTIES SKIP_RETURN_CODE 77)
 
     ic4ext_add_no_camera_test(test_d3d12_frame_sync_thread test_d3d12_frame_sync_thread.cpp)
-    ic4ext_add_no_camera_test(test_v2_d3d12_foundation test_v2_d3d12_foundation.cpp)
+    ic4ext_add_no_camera_test(test_d3d12_readonly_pipeline test_d3d12_readonly_pipeline.cpp)
 
     ic4ext_add_no_camera_test(test_d3d12_shader_compile test_d3d12_shader_compile.cpp)
     target_compile_definitions(test_d3d12_shader_compile PRIVATE IC4EXT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/..")
