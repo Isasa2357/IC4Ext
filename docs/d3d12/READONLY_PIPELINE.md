@@ -82,6 +82,69 @@ IC4 camera buffer
 
 No output texture is duplicated by `CameraCaptureThread` or `FrameSyncThread`.
 
+## Samples
+
+### SingleCameraReadOnlyReadbackD3D12
+
+Validates the single-camera producer path by reading immutable frames and saving the last frame through the existing D3D12 readback helper.
+
+```bat
+SingleCameraReadOnlyReadbackD3D12.exe --device-index 0 --frames 5 --out readonly_frame.ppm
+```
+
+Important arguments:
+
+```text
+--device-index N
+--ic4-json path
+--json-device-index N
+--width W --height H --fps F
+--format BGR8|BGRa8|Mono8|BayerRG8|BayerGR8|BayerGB8|BayerBG8
+--output RGBA8|R8
+--cpu-format BGR8|RGB8|RGBA8|Gray8
+--frames N
+--timeout-ms N
+--pool-initial N --pool-max N
+--out path.ppm|path.pgm
+```
+
+### MultiCameraReadOnlySyncD3D12
+
+Runs two `CameraCaptureThread`s into one central `FrameSyncThread`, then emits three output queues:
+
+- `{0, 1}` at `Maximum`
+- `{0}` at fixed FPS
+- `{1}` at fixed FPS
+
+```bat
+MultiCameraReadOnlySyncD3D12.exe --device0 0 --device1 1 --duration-sec 10 --sync-policy timestamp
+```
+
+For hardware-triggered cameras:
+
+```bat
+MultiCameraReadOnlySyncD3D12.exe --device0 0 --device1 1 --hardware-trigger --trigger-source Line1 --sync-policy frame-number
+```
+
+Important arguments:
+
+```text
+--device0 N --device1 N
+--duration-sec N
+--report-ms N
+--sync-policy frame-number|timestamp
+--timestamp-source auto|host|device
+--max-diff-us N
+--single-output-fps F
+--input-queue N --output-queue N
+--hardware-trigger --trigger-source Line1
+--ic4-json0 path --ic4-json1 path
+--json-device-index0 N --json-device-index1 N
+--width W --height H --fps F
+--format ... --output ...
+--pool-initial N --pool-max N
+```
+
 ## Dependency policy
 
 Dependency versions remain unchanged from the v1.x branch while this D3D12 read-only pipeline is introduced:
@@ -121,8 +184,7 @@ The capture waits for its producer queue to become idle during normal close. Pub
 4. Add a real D3D12 device pool/converter test.
 5. Add dummy-camera capture-thread-to-sync-thread integration tests.
 6. Add real two-camera 160 fps stress and runtime-output-update tests.
-7. Add a sample using hardware trigger, two capture threads and one central sync thread.
-8. Remove the v1 physical-copy fan-out path after migration samples are complete.
+7. Remove the v1 physical-copy fan-out path after migration samples are complete.
 
 ## Resource-state contract
 
