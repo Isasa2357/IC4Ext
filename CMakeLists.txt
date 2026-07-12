@@ -9,6 +9,8 @@ endif()
 project(IC4Ext VERSION "${IC4EXT_VERSION}" LANGUAGES CXX)
 
 include(FetchContent)
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+include(IC4ExtDxcRuntime)
 
 option(IC4EXT_BUILD_SAMPLES "Build IC4Ext samples" ON)
 option(IC4EXT_BUILD_TESTS "Build IC4Ext tests" ON)
@@ -46,57 +48,15 @@ set(IC4EXT_THREADKIT_GIT_TAG "main" CACHE STRING "ThreadKit Git ref")
 set(IC4EXT_NLOHMANN_JSON_GIT_TAG "v3.11.3" CACHE STRING "nlohmann/json Git ref")
 
 # -----------------------------------------------------------------------------
-# DirectX Shader Compiler runtime discovery
+# DirectX Shader Compiler runtime discovery / NuGet restore
 # -----------------------------------------------------------------------------
-set(IC4EXT_DXC_RUNTIME_DIR "" CACHE PATH "Directory containing dxcompiler.dll and dxil.dll")
-
-function(ic4ext_find_dxc_runtime_dir out_var)
-    if(IC4EXT_DXC_RUNTIME_DIR)
-        set(${out_var} "${IC4EXT_DXC_RUNTIME_DIR}" PARENT_SCOPE)
-        return()
-    endif()
-
-    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
-        set(_dxc_arch "x64")
-    else()
-        set(_dxc_arch "x86")
-    endif()
-
-    set(_candidate_dirs)
-    foreach(_base_dir IN LISTS CMAKE_CURRENT_SOURCE_DIR CMAKE_BINARY_DIR)
-        file(GLOB _package_dirs
-            "${_base_dir}/packages/Microsoft.Direct3D.DXC*/bin/${_dxc_arch}"
-            "${_base_dir}/packages/microsoft.direct3d.dxc*/bin/${_dxc_arch}"
-            "${_base_dir}/packages/Microsoft.Direct3D.DXC*/build/native/bin/${_dxc_arch}"
-            "${_base_dir}/packages/microsoft.direct3d.dxc*/build/native/bin/${_dxc_arch}")
-        list(APPEND _candidate_dirs ${_package_dirs})
-    endforeach()
-
-    if(DEFINED ENV{USERPROFILE})
-        file(TO_CMAKE_PATH "$ENV{USERPROFILE}" _user_profile)
-        file(GLOB _global_package_dirs
-            "${_user_profile}/.nuget/packages/microsoft.direct3d.dxc/*/bin/${_dxc_arch}"
-            "${_user_profile}/.nuget/packages/microsoft.direct3d.dxc/*/build/native/bin/${_dxc_arch}")
-        list(APPEND _candidate_dirs ${_global_package_dirs})
-    endif()
-
-    list(REMOVE_DUPLICATES _candidate_dirs)
-    foreach(_dir IN LISTS _candidate_dirs)
-        if(EXISTS "${_dir}/dxcompiler.dll")
-            set(${out_var} "${_dir}" PARENT_SCOPE)
-            return()
-        endif()
-    endforeach()
-    set(${out_var} "" PARENT_SCOPE)
-endfunction()
-
-ic4ext_find_dxc_runtime_dir(IC4EXT_RESOLVED_DXC_RUNTIME_DIR)
+ic4ext_resolve_dxc_runtime(IC4EXT_RESOLVED_DXC_RUNTIME_DIR)
 if(IC4EXT_RESOLVED_DXC_RUNTIME_DIR)
-    message(STATUS "IC4Ext: found DXC runtime: ${IC4EXT_RESOLVED_DXC_RUNTIME_DIR}")
+    message(STATUS "IC4Ext: using DXC runtime: ${IC4EXT_RESOLVED_DXC_RUNTIME_DIR}")
     set(D3D11HELPER_DXC_RUNTIME_DIR "${IC4EXT_RESOLVED_DXC_RUNTIME_DIR}" CACHE PATH "DXC runtime" FORCE)
     set(D3D12HELPER_DXC_RUNTIME_DIR "${IC4EXT_RESOLVED_DXC_RUNTIME_DIR}" CACHE PATH "DXC runtime" FORCE)
 else()
-    message(WARNING "IC4Ext: DXC runtime was not found. Pass -DIC4EXT_DXC_RUNTIME_DIR=path/to/bin/x64 when required.")
+    message(WARNING "IC4Ext: DXC runtime was not found and could not be restored. Executables that compile HLSL at runtime may fail to find dxcompiler.dll/dxil.dll. Set IC4EXT_DXC_RUNTIME_DIR or keep IC4EXT_FETCH_DXC_RUNTIME=ON with internet/NuGet access.")
 endif()
 
 # -----------------------------------------------------------------------------
