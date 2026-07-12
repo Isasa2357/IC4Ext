@@ -1,256 +1,246 @@
 # IC4Ext
 
-IC4Ext は、The Imaging Source **IC Imaging Control 4 SDK** で取得したカメラフレームを、Direct3D 11 / Direct3D 12 の GPU texture として扱うための C++17 ライブラリです。
+IC4Extは、The Imaging Source **IC Imaging Control 4 SDK**で取得したcamera frameを、Direct3D 11 / Direct3D 12のGPU resourceとして扱うC++17 libraryである。
 
-IC4 の `QueueSink` から受け取った CPU 側 image buffer を D3D11 / D3D12 texture へ変換し、同期用 metadata、chunk metadata、非同期 capture thread、frame sync、DummyCameraCapture、IC Capture 4 から export した JSON 設定、GPU frame の CPU readback を提供します。
+現在のproject versionは**2.0.0**である。
 
-このパッケージの現在位置は **D3DHelper v1.12.1 対応版**です。D3D12 backend は raw D3D12 object だけを渡す初期化ではなく、`D3D12CoreLib::D3D12Core` から作った `D3D12BackendContext` を使います。D3D11 backend も、可能な範囲で D3D11Helper の resource / view / compute pipeline / binding / fence / transfer helper に寄せています。
+D3D12側の正式経路は、1つの完成Texture2Dを複数consumerへ共有する**ReadOnly frame pipeline**である。
 
-## 現在の実装状態
+```cpp
+#include <IC4Ext/D3D12/ReadOnlyPipeline.hpp>
+namespace Pipe = IC4Ext::D3D12;
+```
+
+## 1. Architecture summary
+
+### D3D12
+
+```text
+IC4 ImageBuffer
+    -> CameraCapture
+    -> UploadRing + reusable input buffer
+    -> compute conversion
+    -> CameraCapture-owned FramePool
+    -> ReadOnlyFrame
+    -> CameraCaptureThread
+    -> central FrameSyncThread
+    -> ReadOnlyFrameSetQueue x N
+    -> GPU / CPU / recording consumers
+```
+
+`CameraCaptureThread`と`FrameSyncThread`はoutputごとのGPU texture copyを行わない。fan-outでは同じReadOnly resourceへの共有handleを渡す。
+
+### D3D11
+
+D3D11側は既存のcapture/thread/sync/readback APIを維持している。D3D12 2.0.0と完全に同じpublic architectureではない。
+
+## 2. Compatibility policy
+
+D3D12 v1 physical-copy fan-out APIとのsource compatibilityは保証しない。
+
+旧D3D12のcamera capture/thread/frame sync/frame copier public APIは正式経路から外した。新しいD3D12コードは`IC4Ext::D3D12`を使う。
+
+一部の実装本体は物理移動途中で`include/IC4Ext/V2` / `src/V2`に残っているが、public APIとCMake build entryではない。
+
+## 3. Current implementation status
 
 | 項目 | 状態 |
 |---|---|
 | D3D11 camera capture | 実装済み |
-| D3D12 camera capture | 実装済み。D3D12Helper 統合済み |
-| IC4 JSON state 読み込み | 実装済み。`devices[n].state` を適用 |
-| Runtime setters | 実装済み。露光、gain、gamma、fps、offset、ROI、任意 IC4 property |
-| DummyCameraCapture | D3D11 / D3D12 ともに実装済み |
-| FrameSyncThread | D3D11 / D3D12 ともに実装済み |
-| CpuFrame / readback | D3D11 / D3D12 ともに実装済み。readback resource reuse 対応 |
-| chunk metadata | 実装済み。取得できる chunk のみ `has*` flag 付きで保持 |
+| D3D12 ReadOnly camera capture | 実装済み |
+| D3D12 CameraCapture-owned FramePool | 実装済み |
+| D3D12 pooled input buffer reuse | 実装済み |
+| D3D12 central timestamp sync | 実装済み |
+| Runtime output register/update/remove | 実装済み |
+| Per-output required cameras / FPS / priority | 実装済み |
+| D3D12 consumer lifetime tracker | 実装済み |
+| D3D12 ReadOnly readback | 実装済み |
+| IC4 JSON state | 実装済み |
+| Runtime camera property setters | 実装済み |
+| Chunk metadata | 実装済み |
+| Camera performance snapshot | 実装済み |
+| D3D12 hardware video encoder integration | 未実装 |
 | D3D12-D3D11 interop | 未実装 |
-| 10/12/16bit pixel format | 未実装。必要になったら追加予定 |
+| 10/12/16bit and packed formats | 未実装 |
+| 2-camera 160 fps long-run acceptance | 検証中 |
 
-## Features
+## 4. Features
 
-- IC4 camera frame を D3D11 / D3D12 GPU texture として取得
-- device selection: `serial -> uniqueName -> deviceIndex -> first device`
-- `CameraStreamRequest::requestedFormat` を IC4 device の `PixelFormat` property として設定
-- `ReadMode::LatestFrame` / `ReadMode::NextFrame` を選択可能
-- `FrameTiming` として `frameNumber` / `deviceTimestampNs` / `hostReceivedTime` を保持
-- `FrameChunkMetadata` として `ChunkBlockId` / `ChunkExposureTime` / `ChunkGain` / IMX174 / MultiFrameSet 系 chunk を保持
-- D3D11.4 fence (`ID3D11Fence`) / D3D12 fence による GPU ready token
-- `.hlsl` runtime compile と `.cso` load の両対応
-- IC Capture 4 公式ソフトから export した JSON (`devices[n].state`) を `nlohmann/json` で読み込み
-- JSON に含まれない `OffsetX` / `OffsetY` を明示指定可能
-- `ExposureTime` / `Gain` / `Gamma` / `AcquisitionFrameRate` / `ROI` などを open 後に setter で変更可能
-- `D3D11DummyCameraCaptureGenerator` / `D3D12DummyCameraCaptureGenerator` による、1 台の実カメラからの擬似複数カメラ生成
-- GPU frame を `CpuFrame` として readback し、`Gray8` / `RGBA8` / `RGB8` / `BGR8` に変換可能
-- `D3D11FrameReadback` は staging texture cache、`D3D12FrameReadback` は readback buffer cache を持つ
+- IC4 camera frameをD3D11/D3D12 GPU resourceへ変換。
+- device selection: `serial -> uniqueName -> deviceIndex -> first device`。
+- IC Capture 4からexportしたJSON `devices[n].state`を適用。
+- `ReadMode::LatestFrame` / `ReadMode::NextFrame`。
+- `FrameTiming`: frame number、device timestamp、host received time。
+- `FrameChunkMetadata`: block id、exposure、gain、IMX174、MultiFrameSet fields。
+- hardware/software trigger設定helper。
+- exposure、gain、gamma、fps、ROI、offset、PixelFormat、任意property setter。
+- GPU ready fence token。
+- D3D12 FramePoolとReadOnly共有fan-out。
+- timestamp-nearest中央同期。
+- outputごとのrequired cameras、FPS、priority、enabled。
+- outputの実行中追加、更新、queue差替え、削除。
+- consumer GPU completionまでのlifetime tracking。
+- GPU frameからtight-packed `CpuFrame`へのreadback。
+- D3D11 staging texture cache / D3D12 readback buffer cache。
+- camera-free D3D12 `ReadOnlyFrameSource` injection。
+- D3D12 10-pipeline stress sample。
 
-## Supported formats
+## 5. Supported formats
 
-### Camera input formats
+### Camera input
 
-現在対応している IC4 入力 format は 8bit 系のみです。
-
-```txt
+```text
 Mono8
 BayerRG8 / BayerGR8 / BayerGB8 / BayerBG8
 BGR8
 BGRa8
 ```
 
-### GPU output formats
+### GPU output
 
-```txt
+```text
 R8
 RGBA8
 ```
 
-対応変換は以下です。
+### CPU readback
 
-```txt
-Mono8   -> R8
-Mono8   -> RGBA8
-Bayer*8 -> RGBA8
-BGR8    -> RGBA8
-BGRa8   -> RGBA8
-```
-
-### CPU readback formats
-
-`D3D11CameraFrame` / `D3D12CameraFrame` は readback により共通の `CpuFrame` に変換できます。`FrameChunkMetadata` も GPU frame から `CpuFrame` へ引き継がれます。
-
-```txt
+```text
 Gray8
 RGBA8
 RGB8
 BGR8
 ```
 
-`CpuFrame` は常に tight packed です。
+### Supported conversion
 
-`D3D11FrameReadback::cacheStats()` / `D3D12FrameReadback::cacheStats()` で readback cache の hit / miss / rebuild 数を確認できます。`resetCache()` で保持している readback resource を解放し、統計を初期化します。
-
-### Chunk metadata
-
-IC4 chunk data が有効な場合、`FrameChunkMetadata` に以下を保持します。取得できなかった項目は対応する `has*` flag が `false` のままです。
-
-```txt
-ChunkBlockId
-ChunkExposureTime
-ChunkGain
-ChunkIMX174FrameId
-ChunkIMX174FrameSet
-ChunkMultiFrameSetId
-ChunkMultiFrameSetFrameId
+```text
+Mono8    -> R8
+Mono8    -> RGBA8
+Bayer*8  -> RGBA8
+BGR8     -> RGBA8
+BGRa8    -> RGBA8
 ```
 
-### 未対応 format
-
-必要になった時点で追加する方針です。
-
-```txt
-Mono10 / Mono12 / Mono16
-Bayer10 / Bayer12 / Bayer16
-Bayer10p / Bayer12p
-YUV / YCbCr
-Polarized formats
-MJPG / NV12
-```
-
-## Requirements
+## 6. Requirements
 
 - Windows 10/11
-- Visual Studio 2019 以降、または CMake から使える MSVC 環境
-- CMake 3.21 以降
+- Visual Studio 2022または互換MSVC toolchain
+- CMake 3.21+
 - IC Imaging Control 4 SDK
-- Direct3D 11.4 compatible environment
-- Direct3D 12 compatible environment when `IC4EXT_ENABLE_D3D12=ON`
+- D3D11.4対応環境（D3D11を使う場合）
+- D3D12対応環境（D3D12を使う場合）
 
-IC4 SDK は自動取得しません。IC4 installer が登録する `IC4PATH` 環境変数を利用します。`IC4_SDK_ROOT` を CMake で明示しない場合、IC4Ext は `$ENV{IC4PATH}` を既定値として使います。
+IC4 SDKは自動取得しない。`IC4_SDK_ROOT`またはinstallerが設定する`IC4PATH`を使う。
 
-Typical IC4 SDK layout:
-
-```txt
-%IC4PATH%/include
-%IC4PATH%/lib/x64/ic4core.lib
-%IC4PATH%/bin/x64/ic4core.dll
+```bat
+set "IC4_SDK_ROOT=C:\Users\MiyafujiLab2\AppData\Local\Programs\The Imaging Source Europe GmbH\IC Imaging Control 4"
+set "IC4PATH=%IC4_SDK_ROOT%"
 ```
 
-## Dependencies
+## 7. Dependencies
 
-CMake の `FetchContent` により、通常は以下を自動取得します。
+通常はCMake `FetchContent`で取得する。
 
-```txt
+```text
 D3D11Helper v1.12.1
 D3D12Helper v1.12.1
-ThreadKit
-nlohmann/json single header
+ThreadKit main
+nlohmann/json v3.11.3
 ```
 
-外部依存として許可しているのは、D3DHelper v1.12.1、ThreadKit、nlohmann/json、boost です。IC4Ext 本体は OpenCV などには依存しません。
+IC4Ext library本体はOpenCVに依存しない。`MultiPipelineStressD3D12`など一部sampleだけがOpenCVを要求する。
 
-外部依存をローカル checkout から使う場合は、以下を指定できます。
+## 8. DXC runtime
+
+`dxcompiler.dll`と`dxil.dll`はCMakeが既存package/global NuGet cacheから探し、必要なら`Microsoft.Direct3D.DXC`をNuGetから取得する。
+
+```text
+-DIC4EXT_FETCH_DXC_RUNTIME=ON
+```
+
+sample/test targetでは両DLLをexeと同じdirectoryへcopyする。
+
+version固定:
+
+```text
+-DIC4EXT_DXC_NUGET_VERSION=1.9.2602.24
+```
+
+## 9. Build: D3D12
+
+失敗してもCMDを閉じない例:
 
 ```bat
--DD3D11HELPER_ROOT="C:/Path/To/D3D11Helper" ^
--DD3D12HELPER_ROOT="C:/Path/To/D3D12Helper" ^
--DTHREADKIT_ROOT="C:/Path/To/ThreadKit"
+set "IC4_SDK_ROOT=C:\Users\MiyafujiLab2\AppData\Local\Programs\The Imaging Source Europe GmbH\IC Imaging Control 4"
+set "IC4PATH=%IC4_SDK_ROOT%"
+set "IC4EXT_OK=1"
+
+git fetch origin
+git switch agent/ic4ext-v2-d3d12-foundation
+git pull --ff-only origin agent/ic4ext-v2-d3d12-foundation
+
+cmake -S . -B out\build\v2_d3d12 ^
+  -G "Visual Studio 17 2022" ^
+  -A x64 ^
+  -DIC4EXT_ENABLE_D3D11=OFF ^
+  -DIC4EXT_ENABLE_D3D12=ON ^
+  -DIC4EXT_BUILD_SAMPLES=ON ^
+  -DIC4EXT_BUILD_TESTS=ON ^
+  -DIC4EXT_FETCH_DXC_RUNTIME=ON
+
+if errorlevel 1 set "IC4EXT_OK=0"
+if "%IC4EXT_OK%"=="0" echo [ERROR] configure failed. CMD remains open.
+
+if "%IC4EXT_OK%"=="1" cmake --build out\build\v2_d3d12 ^
+  --config Release ^
+  --parallel
+
+if errorlevel 1 set "IC4EXT_OK=0"
+if "%IC4EXT_OK%"=="0" echo [ERROR] build failed. CMD remains open.
 ```
 
-## Build
+## 10. Build: OpenCV stress sample
 
-### CMD: existing clone
+OpenCV root例:
 
-以下は、既に clone 済みで、現在の作業ディレクトリが IC4Ext の root、つまり `CMakeLists.txt` がある場所である前提です。`exit /b` は入れていません。
+```text
+C:\personal\iwatake\library\opencv
+```
 
 ```bat
-git pull
+set "OPENCV_ROOT=C:\personal\iwatake\library\opencv"
+set "OpenCV_DIR=%OPENCV_ROOT%\build\x64\vc17\lib"
+set "OPENCV_BIN=%OPENCV_ROOT%\build\x64\vc17\bin"
+set "PATH=%OPENCV_BIN%;%PATH%"
 
-set "IC4_SDK_ROOT="
-set "IC4EXT_DXC_RUNTIME_DIR=%CD%\packages\Microsoft.Direct3D.DXC.1.9.2602.24\build\native\bin\x64"
-set "PATH=%IC4PATH%\bin\x64;%IC4EXT_DXC_RUNTIME_DIR%;%PATH%"
+cmake -S . -B out\build\v2_d3d12 ^
+  -G "Visual Studio 17 2022" ^
+  -A x64 ^
+  -DIC4EXT_ENABLE_D3D11=OFF ^
+  -DIC4EXT_ENABLE_D3D12=ON ^
+  -DIC4EXT_BUILD_SAMPLES=ON ^
+  -DIC4EXT_BUILD_TESTS=ON ^
+  -DIC4EXT_FETCH_DXC_RUNTIME=ON ^
+  -DOpenCV_DIR="%OpenCV_DIR%"
 
-nuget install Microsoft.Direct3D.DXC -Version 1.9.2602.24 -OutputDirectory packages
-
-rmdir /s /q out\build\default 2>nul
-
-cmake -S . -B out\build\default -G "Visual Studio 17 2022" -A x64 -DIC4EXT_BUILD_SAMPLES:BOOL=ON -DIC4EXT_BUILD_TESTS:BOOL=ON -DIC4EXT_ENABLE_D3D11:BOOL=ON -DIC4EXT_ENABLE_D3D12:BOOL=ON "-DIC4EXT_DXC_RUNTIME_DIR:PATH=%IC4EXT_DXC_RUNTIME_DIR%" "-DD3D11HELPER_DXC_RUNTIME_DIR:PATH=%IC4EXT_DXC_RUNTIME_DIR%" "-DD3D12HELPER_DXC_RUNTIME_DIR:PATH=%IC4EXT_DXC_RUNTIME_DIR%" -DIC4EXT_D3D11HELPER_GIT_TAG:STRING=v1.12.1 -DIC4EXT_D3D12HELPER_GIT_TAG:STRING=v1.12.1 -DIC4EXT_FETCH_DEPENDENCIES:BOOL=ON -DIC4EXT_FETCH_D3D11HELPER:BOOL=ON -DIC4EXT_FETCH_D3D12HELPER:BOOL=ON -DIC4EXT_FETCH_THREADKIT:BOOL=ON -DIC4EXT_FETCH_NLOHMANN_JSON:BOOL=ON
-
-cmake --build out\build\default --config Debug --parallel
+cmake --build out\build\v2_d3d12 ^
+  --config Release ^
+  --target MultiPipelineStressD3D12 ^
+  --parallel
 ```
 
-### Test labels
-
-テストは CTest label で3分類しています。
-
-```txt
-no_camera   : カメラなしで実行可能
-camera1     : IC4 camera 1台が必要
-camera2plus : IC4 camera 2台以上が必要。FrameSyncThread 向け
-```
-
-```bat
-ctest --test-dir out\build\default -C Debug -L no_camera --output-on-failure
-
-set "IC4EXT_TEST_CAMERA_COOLDOWN_MS=5000"
-ctest --test-dir out\build\default -C Debug -L camera1 --output-on-failure
-ctest --test-dir out\build\default -C Debug -L camera2plus --output-on-failure
-```
-
-カメラの既定フォーマットで open できない場合は、JSON または format 指定を使います。
-
-```bat
-set "IC4EXT_TEST_IC4_JSON=C:\path\to\camera_state.json"
-set "IC4EXT_TEST_FORMAT=BGR8"
-```
-
-2台テストで個別 JSON を使う場合:
-
-```bat
-set "IC4EXT_TEST_IC4_JSON_0=C:\path\to\camera0.json"
-set "IC4EXT_TEST_IC4_JSON_1=C:\path\to\camera1.json"
-```
-
-## Minimal usage
-
-### D3D11 capture
+## 11. Minimal D3D12 capture
 
 ```cpp
-#include <IC4Ext/IC4Ext.hpp>
-#include <D3D11Helper/D3D11Core/D3D11Core.hpp>
-
-int main()
-{
-    auto core = D3D11CoreLib::D3D11Core::CreateShared();
-
-    IC4Ext::IC4DeviceSelector selector;
-    selector.deviceIndex = 0;
-
-    IC4Ext::CameraCaptureConfig config;
-    config.streamRequest.width = 1920;
-    config.streamRequest.height = 1080;
-    config.streamRequest.fps = 60.0;
-    config.streamRequest.requestedFormat = IC4Ext::CameraPixelFormat::BGR8;
-    config.outputSpec.outputFormat = IC4Ext::GpuFrameFormat::RGBA8;
-    config.shaderConfig.shaderDirectory = "shaders/d3d11";
-
-    IC4Ext::D3D11CameraCapture cap;
-    if (!cap.open(selector, config, core.get())) {
-        return 1;
-    }
-
-    auto result = cap.read(IC4Ext::ReadMode::LatestFrame);
-    if (result) {
-        result.frame.ready.wait();
-        if (result.frame.chunkMetadata.hasExposureTime) {
-            const double exposureUs = result.frame.chunkMetadata.exposureTimeUs;
-            (void)exposureUs;
-        }
-    }
-}
-```
-
-### D3D12 capture
-
-```cpp
-#include <IC4Ext/IC4Ext.hpp>
+#include <IC4Ext/D3D12/ReadOnlyPipeline.hpp>
+#include <IC4Ext/D3D12/D3D12BackendContext.hpp>
 #include <D3D12Helper/D3D12Core/D3D12Core.hpp>
 
 int main()
 {
+    namespace Pipe = IC4Ext::D3D12;
+
     auto core = D3D12CoreLib::D3D12Core::CreateShared();
     auto backend = IC4Ext::D3D12BackendContext::FromCore(core);
 
@@ -258,96 +248,210 @@ int main()
     selector.deviceIndex = 0;
 
     IC4Ext::CameraCaptureConfig config;
-    config.streamRequest.width = 1920;
-    config.streamRequest.height = 1080;
-    config.streamRequest.fps = 60.0;
     config.streamRequest.requestedFormat = IC4Ext::CameraPixelFormat::BGR8;
     config.outputSpec.outputFormat = IC4Ext::GpuFrameFormat::RGBA8;
-    config.shaderConfig.shaderDirectory = "shaders/d3d12";
 
-    IC4Ext::D3D12CameraCapture cap;
-    if (!cap.open(selector, config, backend)) {
+    Pipe::CameraCaptureOptions options;
+    options.initialFramePoolCapacity = 16;
+    options.maxFramePoolCapacity = 64;
+
+    Pipe::CameraCapture capture;
+    if (!capture.open(selector, config, backend, options)) {
         return 1;
     }
 
-    auto result = cap.read(IC4Ext::ReadMode::LatestFrame);
-    if (result) {
-        result.frame.ready.wait();
-        if (result.frame.chunkMetadata.hasGain) {
-            const double gain = result.frame.chunkMetadata.gain;
-            (void)gain;
-        }
+    auto result = capture.read(IC4Ext::CameraReadOptions{
+        IC4Ext::ReadMode::NextFrame,
+        1000});
+
+    if (!result) {
+        return 2;
     }
+
+    const Pipe::ReadOnlyFrame& frame = result.frame;
+    frame.readyToken().wait(5000);
+
+    ID3D12Resource* texture = frame.resource();
+    const auto timing = frame.timing();
+    (void)texture;
+    (void)timing;
 }
 ```
 
-### Readback to CpuFrame
+## 12. Minimal central synchronization
 
 ```cpp
-IC4Ext::CpuFrame cpu;
+namespace Pipe = IC4Ext::D3D12;
+
+ThreadKit::Queues::QueueOptions ingressOptions;
+ingressOptions.maxSize = 256;
+ingressOptions.overflowPolicy =
+    ThreadKit::Queues::QueueOverflowPolicy::DropOldest;
+
+auto ingress =
+    std::make_shared<Pipe::IndexedReadOnlyFrameQueue>(ingressOptions);
+
+Pipe::FrameSyncConfig syncConfig;
+syncConfig.cameraIds = {0, 1};
+syncConfig.timestampSource = Pipe::FrameSyncTimestampSource::HostReceived;
+syncConfig.maxTimestampDiffNs = 4'000'000;
+syncConfig.maxBufferedFramesPerCamera = 16;
+syncConfig.groupTimeout = std::chrono::milliseconds(100);
+
+Pipe::FrameSyncThread sync(ingress, syncConfig);
+
+ThreadKit::Queues::QueueOptions outputOptions;
+outputOptions.maxSize = 1;
+outputOptions.overflowPolicy =
+    ThreadKit::Queues::QueueOverflowPolicy::DropOldest;
+
+auto displayQueue =
+    std::make_shared<Pipe::ReadOnlyFrameSetQueue>(outputOptions);
+
+Pipe::FrameSyncOutputConfig displayConfig;
+displayConfig.requiredCameras = {0, 1};
+displayConfig.frameRate = Pipe::FrameRateLimit::Maximum();
+displayConfig.priority = 100;
+
+const auto outputId = sync.registerOutput(displayQueue, displayConfig);
+
+Pipe::CameraCaptureThread camera0(
+    0, selector0, cameraConfig0, backend, captureOptions, threadOptions);
+Pipe::CameraCaptureThread camera1(
+    1, selector1, cameraConfig1, backend, captureOptions, threadOptions);
+
+camera0.setOutputQueue(ingress);
+camera1.setOutputQueue(ingress);
+
+sync.start();
+camera0.start();
+camera1.start();
+```
+
+D3D12 synchronizationはtimestamp-nearestのみである。frame-number matchingは使わない。
+
+## 13. Runtime output update
+
+```cpp
+auto config = sync.outputConfig(outputId);
+if (config) {
+    config->requiredCameras = {0};
+    config->frameRate = Pipe::FrameRateLimit::Fixed(30.0);
+    config->priority = 200;
+    sync.updateOutput(outputId, *config);
+}
+
+sync.replaceOutputQueue(outputId, newQueue);
+sync.unregisterOutput(outputId);
+```
+
+変更は次の完全同期setから反映する。既にdispatch snapshotへ入ったsetが旧queueへ1回届く可能性がある。
+
+## 14. GPU consumer lifetime
+
+```cpp
+Pipe::ReadOnlyFrameLifetimeTracker tracker;
+
+const Pipe::ReadOnlyFrame* input = frameSet.find(0);
+Pipe::WaitForReadOnlyFrameReadyOnQueue(processingQueue, *input);
+
+auto consumerDone = SubmitProcessingAndSignal();
+tracker.retainUntil(*input, consumerDone);
+tracker.collectCompleted();
+```
+
+producer-ready tokenだけではconsumer GPU完了までresourceを保持できない。
+
+## 15. Readback
+
+```cpp
 IC4Ext::D3D12FrameReadback readback;
-readback.initialize(backend);
+readback.initialize(consumerBackend);
 
-if (readback.readback(gpuFrame, IC4Ext::CpuFrameFormat::BGR8, cpu)) {
-    // cpu.data は tight packed BGR8。
-    // cpu.chunkMetadata は gpuFrame.chunkMetadata から引き継がれる。
+IC4Ext::CpuFrame cpu;
+if (readback.readback(
+        readOnlyFrame,
+        IC4Ext::CpuFrameFormat::BGR8,
+        cpu,
+        5000)) {
+    // cpu.data is tight-packed BGR8.
 }
-
-const auto stats = readback.cacheStats();
-// stats.cacheHits / cacheMisses / resourceRebuilds で readback resource reuse を確認できる。
 ```
 
-## IC Capture 4 JSON settings
+並列CPU consumerごとに専用D3D12 queueと専用readback instanceを持つことを推奨する。
 
-IC Capture 4 exported JSON can be passed through `CameraCaptureConfig::ic4StateJson.path`.
+## 16. Samples
 
-IC4Ext reads:
-
-```txt
-devices[deviceIndex].state
+```text
+IC4DeviceDiagnostics
+SingleCameraReadOnlyReadbackD3D12
+MultiCameraReadOnlySyncD3D12
+MultiPipelineStressD3D12
 ```
 
-Example:
+10-pipeline stress sampleは、各CPU/display/video consumerが独立readbackを行う。
 
-```cpp
-IC4Ext::CameraCaptureConfig config;
-config.ic4StateJson.path = "camera_state.json";
-config.ic4StateJson.deviceIndex = 0;
-config.ic4StateJson.strict = false;
-config.streamRequest.offsetX = 0;
-config.streamRequest.offsetY = 0;
+## 17. Tests
+
+```text
+test_core
+test_cpu_frame
+test_backend_config
+test_chunk_metadata
+test_d3d12_core
+test_d3d12_shader_reference
+test_d3d12_readonly_pipeline
+test_d3d12_pooled_converter_device
+test_d3d12_dummy_capture_sync_integration
+test_d3d12_shader_compile
 ```
 
-When `--ic4-json` is specified in samples, `PixelFormat`, `Width`, `Height`, `AcquisitionFrameRate`, and other scalar properties are loaded from `devices[0].state`. Use `--force-format 1` to override the JSON pixel format with `--format`.
-
-## Runtime setters
-
-After opening a camera, common IC4 properties can be changed through typed setters:
-
-```cpp
-cap.setExposureAuto("Off");
-cap.setExposureTime(2000.0);
-cap.setGainAuto("Off");
-cap.setGain(12.0);
-cap.setGamma(1.0);
-cap.setFrameRate(160.0);
-cap.setOffset(0, 0);
-cap.setRoi(1536, 1536, 0, 0);
-cap.setIC4Property("ReverseX", false);
+```bat
+ctest --test-dir out\build\v2_d3d12 ^
+  -C Release ^
+  -L no_camera ^
+  --output-on-failure
 ```
 
-Some properties, especially `Width`, `Height`, `OffsetX`, `OffsetY`, and `PixelFormat`, may be locked while acquisition is running depending on camera model and IC4 state. In that case, the setter returns `false` and `lastError()` stores the IC4 error information.
+## 18. Preliminary validation
 
-## Documentation
+10-pipeline実機試験では、capture poolを16/64から128/256へ増やすことで、pool exhaustion、capture timeout、sync dropが解消した。
 
-詳細は `docs/README.md` と `docs/design/*.md` を参照してください。現在の実装状態と今後の残タスクは `docs/design/14_CurrentStatusAndRoadmap.md` に整理しています。
+large pool実行の予備値:
 
-## Known limitations / TODO
+```text
+sync rate          約53.36 sets/s
+sync drop          0
+camera read        3201 / 3202 in 60 s
+pool exhaustion    0 / 0
+HLSL Sobel         input rateへ追従
+OpenCV recording   約7-17 fps
+```
 
-- D3D12-D3D11 shared texture interop は未実装です。
-- 10/12/16bit packed / unpacked pixel format は未実装です。
-- 高 fps 長時間運用と実カメラ readback 統合テストは今後の確認事項です。
+この結果は160 fps acceptanceではない。外部trigger周波数、camera setting、ROI、exposure、USB帯域を切り分ける必要がある。
+
+## 19. Documentation
+
+推奨入口:
+
+```text
+docs/README.md
+docs/d3d12/READONLY_PIPELINE.md
+docs/d3d12/VALIDATION_AND_TUNING.md
+samples/MultiPipelineStressD3D12/README.md
+docs/design/14_CurrentStatusAndRoadmap.md
+```
+
+## 20. Known limitations
+
+- 一部D3D12実装本体の物理移動が未完了。
+- D3D12 hardware encoder未統合。
+- D3D12-D3D11 interop未実装。
+- 10/12/16bit、packed Bayer、YUV/NV12等は未実装。
+- pair timestamp delta percentile統計は未実装。
+- device removal / DRED failure injection testは未実装。
+- 2台160 fps 10分以上のacceptanceは未完了。
 
 ## License
 
-Add a license file before public distribution.
+Public distribution前にlicense fileを追加すること。
