@@ -8,7 +8,7 @@
 
 namespace IC4Ext::D3D12 {
 
-using FramePoolExhaustionPolicy = FramePoolExhaustionPolicy;
+// FramePoolExhaustionPolicy is defined directly by the imported implementation header.
 using FramePoolConfig = D3D12FramePoolConfig;
 using FramePoolStats = D3D12FramePoolStats;
 using FrameWriter = D3D12FrameWriter;
