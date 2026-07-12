@@ -19,7 +19,7 @@
 #include <string>
 #include <vector>
 
-namespace IC4Ext::V2 {
+namespace IC4Ext::D3D12 {
 class D3D12PooledFrameConverter;
 }
 
@@ -110,7 +110,7 @@ private:
 
     ErrorInfo lastError_;
 
-    friend class V2::D3D12PooledFrameConverter;
+    friend class D3D12::D3D12PooledFrameConverter;
 };
 
 } // namespace IC4Ext
