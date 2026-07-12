@@ -49,21 +49,6 @@ struct FrameRateLimit
     }
 };
 
-enum class FrameSyncPolicy : std::uint32_t
-{
-    // Match camera-provided frame numbers by absolute value.
-    // Use only when all cameras expose the same counter domain.
-    FrameNumberExact = 0,
-
-    // Match camera-provided frame numbers after subtracting each camera's first
-    // observed frame number in this sync thread. This is useful for hardware
-    // triggered cameras whose device counters start from different values.
-    FrameNumberRelative = 1,
-
-    // Match nearest timestamps within maxTimestampDiffNs.
-    TimestampNearest = 2,
-};
-
 enum class FrameSyncTimestampSource : std::uint32_t
 {
     Auto = 0,
@@ -73,8 +58,11 @@ enum class FrameSyncTimestampSource : std::uint32_t
 
 struct FrameSyncConfig
 {
+    // Frame synchronization always uses timestamp-nearest matching.
+    // Frame-number matching is intentionally unsupported because independent
+    // cameras can expose different frame-number counter domains even when they
+    // are hardware-triggered together.
     std::vector<CameraId> cameraIds;
-    FrameSyncPolicy policy = FrameSyncPolicy::FrameNumberExact;
     FrameSyncTimestampSource timestampSource = FrameSyncTimestampSource::Auto;
     std::uint64_t maxTimestampDiffNs = 1'000'000;
     std::size_t maxBufferedFramesPerCamera = 8;
@@ -82,10 +70,8 @@ struct FrameSyncConfig
 
     bool isValid() const noexcept
     {
-        if (cameraIds.empty() || maxBufferedFramesPerCamera == 0 || groupTimeout.count() <= 0) {
-            return false;
-        }
-        if (policy == FrameSyncPolicy::TimestampNearest && maxTimestampDiffNs == 0) {
+        if (cameraIds.empty() || maxBufferedFramesPerCamera == 0 ||
+            groupTimeout.count() <= 0 || maxTimestampDiffNs == 0) {
             return false;
         }
         std::vector<CameraId> sorted = cameraIds;
