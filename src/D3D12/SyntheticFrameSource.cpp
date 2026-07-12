@@ -61,7 +61,7 @@ float4 HashNoise(uint2 position)
     value ^= gFrameIndex * 0xc2b2ae35u;
     value ^= gSeedLow;
     value = Hash32(value ^ gSeedHigh);
-    uint value2 = Hash32(value ^ 0x27d4eb2fu);
+    const uint value2 = Hash32(value ^ 0x27d4eb2fu);
     return float4(
         ByteToUnorm(value),
         ByteToUnorm(value >> 8),
@@ -73,8 +73,7 @@ float4 Gradient(uint2 position)
 {
     const float x = gWidth > 1u ? float(position.x) / float(gWidth - 1u) : 0.0f;
     const float y = gHeight > 1u ? float(position.y) / float(gHeight - 1u) : 0.0f;
-    const float frame = ByteToUnorm(gFrameIndex);
-    return float4(x, y, frame, 1.0f);
+    return float4(x, y, ByteToUnorm(gFrameIndex), 1.0f);
 }
 
 float4 Checkerboard(uint2 position)
@@ -90,9 +89,7 @@ float4 FrameCounterBars(uint2 position)
     const uint bar = gWidth > 0u ? min(7u, (position.x * 8u) / gWidth) : 0u;
     const uint bit = (gFrameIndex >> bar) & 1u;
     const float intensity = bit != 0u ? 1.0f : 0.05f;
-    const float vertical = gHeight > 1u
-        ? float(position.y) / float(gHeight - 1u)
-        : 0.0f;
+    const float vertical = gHeight > 1u ? float(position.y) / float(gHeight - 1u) : 0.0f;
     return float4(intensity, vertical, 1.0f - intensity, 1.0f);
 }
 
@@ -165,27 +162,20 @@ std::uint64_t SaturatingMultiply(std::uint64_t lhs, std::uint64_t rhs) noexcept
 
 std::uint64_t ApplySignedOffset(std::uint64_t value, std::int64_t offset) noexcept
 {
-    if (offset >= 0) {
-        return SaturatingAdd(value, static_cast<std::uint64_t>(offset));
-    }
-
-    // Avoid negating INT64_MIN directly.
-    const std::uint64_t magnitude =
-        static_cast<std::uint64_t>(-(offset + 1)) + 1ull;
+    if (offset >= 0) return SaturatingAdd(value, static_cast<std::uint64_t>(offset));
+    const std::uint64_t magnitude = static_cast<std::uint64_t>(-(offset + 1)) + 1ull;
     return magnitude >= value ? 1ull : value - magnitude;
 }
 
-std::uint64_t FrameNumberFor(
-    const SyntheticFrameSourceConfig& config,
-    std::uint64_t frameIndex) noexcept
+std::uint64_t FrameNumberFor(const SyntheticFrameSourceConfig& config,
+                             std::uint64_t frameIndex) noexcept
 {
     return SaturatingAdd(config.firstFrameNumber, frameIndex);
 }
 
-std::uint64_t DeviceTimestampFor(
-    const SyntheticFrameSourceConfig& config,
-    std::uint64_t frameIndex,
-    std::uint64_t periodNs) noexcept
+std::uint64_t DeviceTimestampFor(const SyntheticFrameSourceConfig& config,
+                                 std::uint64_t frameIndex,
+                                 std::uint64_t periodNs) noexcept
 {
     const auto base = SaturatingAdd(
         config.deviceTimestampOriginNs,
@@ -195,10 +185,7 @@ std::uint64_t DeviceTimestampFor(
 
 ErrorInfo TimeoutError(const char* message)
 {
-    return MakeError(
-        ErrorCode::Timeout,
-        "SyntheticFrameSource::read",
-        message);
+    return MakeError(ErrorCode::Timeout, "SyntheticFrameSource::read", message);
 }
 
 } // namespace
@@ -231,20 +218,12 @@ public:
     std::atomic<bool> opened{false};
     ErrorInfo error;
 
-    void setError(ErrorInfo value)
-    {
-        error = std::move(value);
-    }
-
+    void setError(ErrorInfo value) { error = std::move(value); }
     void setError(ErrorCode code, const char* where, std::string message)
     {
         error = MakeError(code, where, std::move(message));
     }
-
-    void clearError()
-    {
-        error = NoError();
-    }
+    void clearError() { error = NoError(); }
 
     bool finishSlot(CommandSlot& slot, std::uint32_t timeoutMs)
     {
@@ -265,9 +244,6 @@ public:
         const auto period = std::chrono::nanoseconds(
             static_cast<std::chrono::nanoseconds::rep>(periodNs));
         nextDeadline += period;
-
-        // Do not emit a catch-up burst when GPU/OS scheduling fell behind. The
-        // next frame remains rate-limited from the actual completion point.
         if (nextDeadline < completedAt) {
             nextDeadline = completedAt + period;
         }
@@ -328,6 +304,10 @@ bool SyntheticFrameSource::initialize(
             "IC4Ext_SyntheticFrameSource.hlsl");
 
         D3D12CoreLib::ComputePipelineDesc pipelineDescription;
+        // Keep the template root signature indices stable across D3D12Helper
+        // versions. The shader does not read t0, but the generated root
+        // signature then uses the conventional SRV/UAV/constants slots.
+        pipelineDescription.numSrvs = 1;
         pipelineDescription.numUavs = 1;
         pipelineDescription.numRootConstantValues =
             static_cast<UINT>(sizeof(ShaderConstants) / sizeof(std::uint32_t));
@@ -337,9 +317,7 @@ bool SyntheticFrameSource::initialize(
             pipelineDescription);
 
         for (auto& slot : next->slots) {
-            slot.context.Initialize(
-                next->backend.device,
-                D3D12_COMMAND_LIST_TYPE_DIRECT);
+            slot.context.Initialize(next->backend.device, D3D12_COMMAND_LIST_TYPE_DIRECT);
             slot.descriptors.Initialize(
                 next->backend.device,
                 D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
@@ -466,8 +444,7 @@ bool SyntheticFrameSource::read(
         const bool infiniteTimeout = options.timeoutMs == INFINITE;
         const auto timeout = std::chrono::milliseconds(options.timeoutMs);
 
-        if (!infiniteTimeout &&
-            (options.timeoutMs == 0 || remaining > timeout)) {
+        if (!infiniteTimeout && (options.timeoutMs == 0 || remaining > timeout)) {
             if (options.timeoutMs > 0) {
                 lock.unlock();
                 std::this_thread::sleep_for(timeout);
@@ -604,9 +581,7 @@ bool SyntheticFrameSource::read(
         slot.completion = ready;
 
         FrameTiming timing;
-        timing.frameNumber = FrameNumberFor(
-            impl_->configValue,
-            impl_->nextFrameIndex);
+        timing.frameNumber = FrameNumberFor(impl_->configValue, impl_->nextFrameIndex);
         timing.deviceTimestampNs = DeviceTimestampFor(
             impl_->configValue,
             impl_->nextFrameIndex,
