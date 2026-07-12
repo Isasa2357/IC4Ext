@@ -1,0 +1,16 @@
+#pragma once
+
+#include "IC4Ext/D3D11/CameraCapture.hpp"
+#include "IC4Ext/D3D11/CameraCaptureThread.hpp"
+#include "IC4Ext/D3D11/D3D11BackendContext.hpp"
+#include "IC4Ext/D3D11/FramePool.hpp"
+#include "IC4Ext/D3D11/FrameQueues.hpp"
+#include "IC4Ext/D3D11/FrameSyncOutputConfig.hpp"
+#include "IC4Ext/D3D11/FrameSyncThread.hpp"
+#include "IC4Ext/D3D11/FrameSyncTypes.hpp"
+#include "IC4Ext/D3D11/PooledFrameConverter.hpp"
+#include "IC4Ext/D3D11/ReadOnlyFrame.hpp"
+#include "IC4Ext/D3D11/ReadOnlyFrameLifetimeTracker.hpp"
+#include "IC4Ext/D3D11/ReadOnlyFrameSet.hpp"
+#include "IC4Ext/D3D11/ReadOnlyFrameSource.hpp"
+#include "IC4Ext/D3D11/SyntheticFrameSource.hpp"
