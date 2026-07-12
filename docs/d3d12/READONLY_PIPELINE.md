@@ -20,6 +20,7 @@ D3D12Pipe::ReadOnlyFrame frame;
 D3D12Pipe::ReadOnlyFrameSet frameSet;
 D3D12Pipe::FramePool pool;
 D3D12Pipe::FrameWriter writer;
+D3D12Pipe::ReadOnlyFrameLifetimeTracker lifetimeTracker;
 ```
 
 ## Implemented components
@@ -60,6 +61,12 @@ D3D12Pipe::FrameWriter writer;
   - `Maximum` or fixed FPS rate gate
   - priority-ordered dispatch
   - bounded ThreadKit output queues
+- `IC4Ext::D3D12::ReadOnlyFrameLifetimeTracker`
+  - retains input `ReadOnlyFrame` handles until a consumer completion fence passes
+  - supports single-frame and frame-set retention
+  - exposes retained/collected counters
+- `IC4Ext::D3D12::WaitForReadOnlyFrameReadyOnQueue`
+  - queues a GPU-side wait from a consumer queue to the producer-ready fence
 - DXC runtime restore/deployment
   - resolves an explicit `IC4EXT_DXC_RUNTIME_DIR` first
   - searches existing `packages/` and the user NuGet cache
@@ -101,6 +108,31 @@ IC4 camera buffer
 ```
 
 No output texture is duplicated by `CameraCaptureThread` or `FrameSyncThread`.
+
+## Consumer-side GPU lifetime contract
+
+A producer-ready token only says that the camera/producer queue has finished writing the read-only texture. It does not keep the input alive until a downstream consumer queue finishes reading it. Consumers that submit GPU work using a `ReadOnlyFrame` must either hold the frame manually or use `ReadOnlyFrameLifetimeTracker`.
+
+Typical use:
+
+```cpp
+namespace Pipe = IC4Ext::D3D12;
+
+const Pipe::ReadOnlyFrame* frame = frameSet.find(0);
+Pipe::WaitForReadOnlyFrameReadyOnQueue(processingQueue, *frame);
+
+// Record and submit GPU work that reads frame->resource() as SRV/COPY_SOURCE.
+IC4Ext::D3D12ReadyToken consumerDone = SubmitProcessingAndSignalFence();
+
+lifetimeTracker.retainUntil(*frame, consumerDone);
+lifetimeTracker.collectCompleted();
+```
+
+For a whole synchronized set:
+
+```cpp
+lifetimeTracker.retainUntil(frameSet, consumerDone);
+```
 
 ## Samples
 
@@ -200,12 +232,11 @@ The capture waits for its producer queue to become idle during normal close. Pub
 ## Remaining D3D12 work
 
 1. Move implementation files out of the temporary `IC4Ext::V2` namespace into `IC4Ext::D3D12`.
-2. Add a reusable consumer-side GPU lifetime tracker and queue-wait helper.
-3. Reuse the pooled converter's per-slot default-heap input buffers instead of rebuilding them for each conversion.
-4. Add a real D3D12 device pool/converter test.
-5. Add dummy-camera capture-thread-to-sync-thread integration tests.
-6. Add real two-camera 160 fps stress and runtime-output-update tests.
-7. Remove the v1 physical-copy fan-out path after migration samples are complete.
+2. Reuse the pooled converter's per-slot default-heap input buffers instead of rebuilding them for each conversion.
+3. Add a real D3D12 device pool/converter test.
+4. Add dummy-camera capture-thread-to-sync-thread integration tests.
+5. Add real two-camera 160 fps stress and runtime-output-update tests.
+6. Remove the v1 physical-copy fan-out path after migration samples are complete.
 
 ## Resource-state contract
 
