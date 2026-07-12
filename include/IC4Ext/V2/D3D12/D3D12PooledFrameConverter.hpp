@@ -7,13 +7,25 @@
 #include "IC4Ext/V2/D3D12/D3D12FramePool.hpp"
 #include "IC4Ext/V2/D3D12/D3D12ReadOnlyFrame.hpp"
 
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 
 namespace IC4Ext::V2 {
 
-// Reuses the validated v1 D3D12FrameConverter pipelines, upload rings and
-// command slots, but records conversion into a D3D12FramePool writer instead
-// of allocating a new output texture for every camera frame.
+struct D3D12PooledFrameConverterStats
+{
+    std::uint64_t conversions = 0;
+    std::uint64_t inputBufferAllocations = 0;
+    std::uint64_t inputBufferReuses = 0;
+    std::size_t cachedInputBufferCount = 0;
+    std::uint64_t cachedInputBufferBytes = 0;
+};
+
+// Reuses the validated D3D12FrameConverter pipelines, upload rings and command
+// slots, but records conversion into a D3D12FramePool writer instead of
+// allocating a new output texture for every camera frame. Each command slot
+// also retains a default-heap input buffer and grows it only when necessary.
 class D3D12PooledFrameConverter final
 {
 public:
@@ -35,6 +47,7 @@ public:
                  FrameChunkMetadata chunkMetadata,
                  D3D12ReadOnlyFrame& outFrame);
 
+    D3D12PooledFrameConverterStats stats() const;
     ErrorInfo lastError() const;
 
 private:
