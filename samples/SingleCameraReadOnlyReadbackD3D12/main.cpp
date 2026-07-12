@@ -3,6 +3,7 @@
 
 #include <D3D12Helper/D3D12Core/D3D12Core.hpp>
 
+#include <algorithm>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
