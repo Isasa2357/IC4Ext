@@ -8,6 +8,7 @@ target_link_libraries(MultiCameraAnalysisDisplayD3D12
         d3d12
         dxgi)
 target_include_directories(MultiCameraAnalysisDisplayD3D12 PRIVATE ${OpenCV_INCLUDE_DIRS})
+ic4ext_copy_dxc_runtime_to_target(MultiCameraAnalysisDisplayD3D12)
 
 if(WIN32 AND IC4_SDK_ROOT)
     add_custom_command(TARGET MultiCameraAnalysisDisplayD3D12 POST_BUILD
