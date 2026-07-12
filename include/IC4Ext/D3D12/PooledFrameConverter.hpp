@@ -8,6 +8,7 @@
 
 namespace IC4Ext::D3D12 {
 
+using PooledFrameConverterStats = D3D12PooledFrameConverterStats;
 using PooledFrameConverter = D3D12PooledFrameConverter;
 
 } // namespace IC4Ext::D3D12
