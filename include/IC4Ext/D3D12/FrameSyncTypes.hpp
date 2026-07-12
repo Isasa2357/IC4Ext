@@ -1,20 +1,12 @@
 #pragma once
 
+#define V2 D3D12
 #include "IC4Ext/V2/Core/FrameSyncTypes.hpp"
+#undef V2
 
 namespace IC4Ext::D3D12 {
 
-using CameraId = ::IC4Ext::V2::CameraId;
-using SyncGroupId = ::IC4Ext::V2::SyncGroupId;
-using FrameSyncOutputId = ::IC4Ext::V2::FrameSyncOutputId;
-
-inline constexpr FrameSyncOutputId InvalidFrameSyncOutputId =
-    ::IC4Ext::V2::InvalidFrameSyncOutputId;
-
-using FrameRateMode = ::IC4Ext::V2::FrameRateMode;
-using FrameRateLimit = ::IC4Ext::V2::FrameRateLimit;
-using FrameSyncTimestampSource = ::IC4Ext::V2::FrameSyncTimestampSource;
-using FrameSyncConfig = ::IC4Ext::V2::FrameSyncConfig;
-using FrameSyncStats = ::IC4Ext::V2::FrameSyncStats;
+inline constexpr FrameSyncOutputId InvalidFrameSyncOutputIdValue =
+    InvalidFrameSyncOutputId;
 
 } // namespace IC4Ext::D3D12
