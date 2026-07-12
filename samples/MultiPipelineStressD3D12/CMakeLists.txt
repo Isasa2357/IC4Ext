@@ -1,7 +1,7 @@
 find_package(OpenCV REQUIRED COMPONENTS core imgproc highgui videoio)
 
 add_executable(MultiPipelineStressD3D12
-    StressMain.cpp
+    StressRunner.cpp
     StressSupport.cpp
     SobelProcessor.cpp
     PipelineWorkers.cpp)
@@ -19,9 +19,6 @@ target_include_directories(MultiPipelineStressD3D12
         ${OpenCV_INCLUDE_DIRS})
 
 target_compile_features(MultiPipelineStressD3D12 PRIVATE cxx_std_17)
-# StressMain.cpp uses std::max while consuming several third-party headers.
-# Make the standard dependency explicit without depending on transitive includes.
-target_precompile_headers(MultiPipelineStressD3D12 PRIVATE <algorithm>)
 ic4ext_copy_dxc_runtime_to_target(MultiPipelineStressD3D12)
 
 if(WIN32 AND IC4_SDK_ROOT)
