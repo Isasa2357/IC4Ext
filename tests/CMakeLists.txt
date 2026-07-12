@@ -69,6 +69,14 @@ if(IC4EXT_ENABLE_D3D12)
         SKIP_RETURN_CODE 77
         TIMEOUT 120)
 
+    ic4ext_add_no_camera_test(
+        test_d3d12_synthetic_source_sync_integration
+        test_d3d12_synthetic_source_sync_integration.cpp)
+    set_tests_properties(test_d3d12_synthetic_source_sync_integration PROPERTIES
+        LABELS "no_camera;d3d12_device;integration;synthetic"
+        SKIP_RETURN_CODE 77
+        TIMEOUT 120)
+
     ic4ext_add_no_camera_test(test_d3d12_shader_compile test_d3d12_shader_compile.cpp)
     target_compile_definitions(test_d3d12_shader_compile PRIVATE IC4EXT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/..")
     if(WIN32)
