@@ -278,7 +278,10 @@ D3D11ReadOnlyFrame D3D11FrameWriter::publish(
     entryIndex_ = InvalidEntryIndex;
     leaseGeneration_ = 0;
     state_.reset();
-    if (contextLock_.owns_lock()) contextLock_.unlock();
+
+    // contextLock_ intentionally remains owned until this writer object leaves
+    // scope. Callers may still have scoped D3D11 bindings whose destructors must
+    // restore context state before another producer transaction can begin.
     return D3D11ReadOnlyFrame(std::move(storage));
 }
 
