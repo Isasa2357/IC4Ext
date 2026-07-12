@@ -39,6 +39,11 @@ This branch introduces the v2 D3D12 API alongside the existing v1 API so that th
   - `Maximum` or fixed FPS rate gate
   - priority-ordered dispatch
   - bounded ThreadKit output queues
+- DXC runtime restore/deployment
+  - resolves an explicit `IC4EXT_DXC_RUNTIME_DIR` first
+  - searches existing `packages/` and the user NuGet cache
+  - restores `Microsoft.Direct3D.DXC` from NuGet when missing
+  - copies both `dxcompiler.dll` and `dxil.dll` next to IC4Ext sample/test executables
 
 ## End-to-end v2 D3D12 path
 
@@ -67,6 +72,20 @@ Dependency versions remain unchanged:
 - nlohmann/json `v3.11.3`
 
 The existing v1 D3D11 and D3D12 APIs remain compiled during the migration. New code is temporarily placed in `IC4Ext::V2` and `include/IC4Ext/V2`.
+
+## DXC runtime behavior
+
+The build defines these cache variables:
+
+```text
+IC4EXT_DXC_RUNTIME_DIR     explicit directory containing dxcompiler.dll and dxil.dll
+IC4EXT_FETCH_DXC_RUNTIME   ON by default; restores Microsoft.Direct3D.DXC when missing
+IC4EXT_DXC_NUGET_PACKAGE   Microsoft.Direct3D.DXC
+IC4EXT_DXC_NUGET_VERSION   optional; empty means NuGet resolves the latest package
+IC4EXT_DXC_NUGET_ROOT      build-local restore/extract directory
+```
+
+Every IC4Ext-created executable target should call `ic4ext_copy_dxc_runtime_to_target(target)`. The helper copies `dxcompiler.dll` and `dxil.dll` to `$<TARGET_FILE_DIR:target>` after build.
 
 ## Lifecycle contract
 
