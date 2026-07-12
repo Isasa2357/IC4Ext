@@ -22,6 +22,7 @@
 #include "IC4Ext/D3D11/D3D11DummyCameraCaptureGenerator.hpp"
 #include "IC4Ext/D3D11/D3D11CameraCaptureThread.hpp"
 #include "IC4Ext/D3D11/D3D11FrameSyncThread.hpp"
+#include "IC4Ext/D3D11/ReadOnlyPipeline.hpp"
 #endif
 
 #if IC4EXT_ENABLE_D3D12
