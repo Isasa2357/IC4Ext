@@ -240,7 +240,16 @@ if(IC4EXT_ENABLE_D3D11)
         src/D3D11/D3D11DummyCameraCaptureGenerator.cpp
         src/D3D11/D3D11CameraCapture.cpp
         src/D3D11/D3D11CameraCaptureThread.cpp
-        src/D3D11/D3D11FrameSyncThread.cpp)
+        src/D3D11/D3D11FrameSyncThread.cpp
+        src/D3D11/ReadOnlyFrame.cpp
+        src/D3D11/ReadOnlyFrameSet.cpp
+        src/D3D11/FramePool.cpp
+        src/D3D11/PooledFrameConverter.cpp
+        src/D3D11/ReadOnlyCameraCapture.cpp
+        src/D3D11/ReadOnlyCameraCaptureThread.cpp
+        src/D3D11/TimestampFrameSyncThread.cpp
+        src/D3D11/ReadOnlyFrameLifetimeTracker.cpp
+        src/D3D11/SyntheticFrameSource.cpp)
 endif()
 
 if(IC4EXT_ENABLE_D3D12)
