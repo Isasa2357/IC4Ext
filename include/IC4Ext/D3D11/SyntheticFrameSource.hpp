@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <stdexcept>
 
 namespace IC4Ext::D3D11 {
 
