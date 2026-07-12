@@ -1,27 +1,30 @@
 # IC4Ext D3D12 read-only frame pipeline
 
-This document describes the D3D12 read-only frame pipeline API. Public user code should prefer the semantic namespace and class names under `IC4Ext::D3D12`.
-
-The older `IC4Ext::V2` namespace remains only as a temporary implementation/migration layer while source files are moved. It is not the intended public API surface.
-
-## Public naming
-
-Use these names in new code:
+This document describes the D3D12 read-only frame pipeline API. New D3D12 user code should include the semantic API under `IC4Ext::D3D12`.
 
 ```cpp
 #include <IC4Ext/D3D12/ReadOnlyPipeline.hpp>
 
-namespace D3D12Pipe = IC4Ext::D3D12;
+namespace Pipe = IC4Ext::D3D12;
 
-D3D12Pipe::CameraCapture capture;
-D3D12Pipe::CameraCaptureThread captureThread(...);
-D3D12Pipe::FrameSyncThread syncThread(...);
-D3D12Pipe::ReadOnlyFrame frame;
-D3D12Pipe::ReadOnlyFrameSet frameSet;
-D3D12Pipe::FramePool pool;
-D3D12Pipe::FrameWriter writer;
-D3D12Pipe::ReadOnlyFrameLifetimeTracker lifetimeTracker;
+Pipe::CameraCapture capture;
+Pipe::CameraCaptureThread captureThread(...);
+Pipe::FrameSyncThread syncThread(...);
+Pipe::ReadOnlyFrame frame;
+Pipe::ReadOnlyFrameSet frameSet;
+Pipe::FramePool pool;
+Pipe::FrameWriter writer;
+Pipe::ReadOnlyFrameLifetimeTracker lifetimeTracker;
 ```
+
+## Public implementation status
+
+The D3D12 read-only pipeline is now the D3D12 build path:
+
+- Public API names live under `IC4Ext::D3D12`.
+- The old D3D12 physical-copy fan-out sources are no longer built.
+- The old D3D12 camera-capture, camera-capture-thread, frame-sync-thread, and frame-copier public headers were removed.
+- Transitional wrapper source files under `src/D3D12` currently include the former implementation bodies and compile them into `IC4Ext::D3D12`. The old `include/IC4Ext/V2` and `src/V2` files are retained only as implementation source material while the code is being physically relocated; they are no longer the public API or CMake build entries.
 
 ## Implemented components
 
@@ -37,7 +40,6 @@ D3D12Pipe::ReadOnlyFrameLifetimeTracker lifetimeTracker;
 - `IC4Ext::D3D12::PooledFrameConverter`
   - reuses the existing D3D12 converter shader pipelines, upload rings and command slots
   - writes directly into a frame-pool lease
-  - copies the pool UAV descriptor into the converter's per-slot descriptor heap
   - publishes the completed texture as a read-only frame after queue signaling
 - `IC4Ext::D3D12::CameraCapture`
   - owns the pooled producer path
@@ -45,33 +47,20 @@ D3D12Pipe::ReadOnlyFrameLifetimeTracker lifetimeTracker;
   - lazily creates or replaces the frame pool from the negotiated frame shape
   - returns `ReadOnlyFrame` from `read()`
   - preserves hardware/software trigger and property control APIs
-  - exposes capture and frame-pool statistics
 - `IC4Ext::D3D12::CameraCaptureThread`
   - continuously reads `ReadOnlyFrame`
   - submits one shared handle to the central sync ingress queue
   - has no physical GPU-copy fan-out path
-  - supports runtime replacement of the central ingress queue
-- `IC4Ext::D3D12::ReadOnlyFrameSet`
-  - immutable selected-camera frame set
 - `IC4Ext::D3D12::FrameSyncThread`
-  - one complete synchronized set across all registered cameras
   - timestamp-nearest matching only
   - runtime output registration/update/replacement/removal
   - required-camera selection per output
   - `Maximum` or fixed FPS rate gate
   - priority-ordered dispatch
-  - bounded ThreadKit output queues
 - `IC4Ext::D3D12::ReadOnlyFrameLifetimeTracker`
   - retains input `ReadOnlyFrame` handles until a consumer completion fence passes
-  - supports single-frame and frame-set retention
-  - exposes retained/collected counters
 - `IC4Ext::D3D12::WaitForReadOnlyFrameReadyOnQueue`
   - queues a GPU-side wait from a consumer queue to the producer-ready fence
-- DXC runtime restore/deployment
-  - resolves an explicit `IC4EXT_DXC_RUNTIME_DIR` first
-  - searches existing `packages/` and the user NuGet cache
-  - restores `Microsoft.Direct3D.DXC` from NuGet when missing
-  - copies both `dxcompiler.dll` and `dxil.dll` next to IC4Ext sample/test executables
 
 ## Timestamp-only synchronization
 
@@ -144,22 +133,6 @@ Validates the single-camera producer path by reading immutable frames and saving
 SingleCameraReadOnlyReadbackD3D12.exe --device-index 0 --frames 5 --out readonly_frame.ppm
 ```
 
-Important arguments:
-
-```text
---device-index N
---ic4-json path
---json-device-index N
---width W --height H --fps F
---format BGR8|BGRa8|Mono8|BayerRG8|BayerGR8|BayerGB8|BayerBG8
---output RGBA8|R8
---cpu-format BGR8|RGB8|RGBA8|Gray8
---frames N
---timeout-ms N
---pool-initial N --pool-max N
---out path.ppm|path.pgm
-```
-
 ### MultiCameraReadOnlySyncD3D12
 
 Runs two `CameraCaptureThread`s into one central `FrameSyncThread`, then emits three output queues:
@@ -180,24 +153,6 @@ For hardware-triggered cameras:
 MultiCameraReadOnlySyncD3D12.exe --device0 0 --device1 1 --hardware-trigger --trigger-source Line1 --timestamp-source host --max-diff-us 4000
 ```
 
-Important arguments:
-
-```text
---device0 N --device1 N
---duration-sec N
---report-ms N
---timestamp-source auto|host|device
---max-diff-us N
---single-output-fps F
---input-queue N --output-queue N
---hardware-trigger --trigger-source Line1
---ic4-json0 path --ic4-json1 path
---json-device-index0 N --json-device-index1 N
---width W --height H --fps F
---format ... --output ...
---pool-initial N --pool-max N
-```
-
 ## Dependency policy
 
 Dependency versions remain unchanged from the v1.x branch while this D3D12 read-only pipeline is introduced:
@@ -209,34 +164,13 @@ Dependency versions remain unchanged from the v1.x branch while this D3D12 read-
 
 Recording via `D3DVideoEncoder` is not enabled by default because its current `main` branch can require D3D12Helper headers newer than the pinned IC4Ext helper dependency.
 
-## DXC runtime behavior
-
-The build defines these cache variables:
-
-```text
-IC4EXT_DXC_RUNTIME_DIR     explicit directory containing dxcompiler.dll and dxil.dll
-IC4EXT_FETCH_DXC_RUNTIME   ON by default; restores Microsoft.Direct3D.DXC when missing
-IC4EXT_DXC_NUGET_PACKAGE   Microsoft.Direct3D.DXC
-IC4EXT_DXC_NUGET_VERSION   optional; empty means NuGet resolves the latest package
-IC4EXT_DXC_NUGET_ROOT      build-local restore/extract directory
-```
-
-Every IC4Ext-created executable target should call `ic4ext_copy_dxc_runtime_to_target(target)`. The helper copies `dxcompiler.dll` and `dxil.dll` to `$<TARGET_FILE_DIR:target>` after build.
-
-## Lifecycle contract
-
-The owning application must stop and join `CameraCaptureThread` before closing or destroying its capture. A processing consumer must retain every input `ReadOnlyFrame` until the consumer's GPU work that reads the frame has completed.
-
-The capture waits for its producer queue to become idle during normal close. Published frames can outlive the capture because they retain the pool state and D3D12 resource references independently.
-
 ## Remaining D3D12 work
 
-1. Move implementation files out of the temporary `IC4Ext::V2` namespace into `IC4Ext::D3D12`.
+1. Physically relocate the remaining implementation bodies from `src/V2` / `include/IC4Ext/V2` into normal `src/D3D12` / `include/IC4Ext/D3D12` files instead of wrapper-including them.
 2. Reuse the pooled converter's per-slot default-heap input buffers instead of rebuilding them for each conversion.
 3. Add a real D3D12 device pool/converter test.
 4. Add dummy-camera capture-thread-to-sync-thread integration tests.
 5. Add real two-camera 160 fps stress and runtime-output-update tests.
-6. Remove the v1 physical-copy fan-out path after migration samples are complete.
 
 ## Resource-state contract
 
