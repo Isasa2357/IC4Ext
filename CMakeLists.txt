@@ -181,21 +181,15 @@ if(IC4EXT_ENABLE_D3D12)
         src/D3D12/D3D12ReadyToken.cpp
         src/D3D12/D3D12FenceManager.cpp
         src/D3D12/D3D12FrameConverter.cpp
-        src/D3D12/D3D12FrameCopier.cpp
         src/D3D12/D3D12FrameReadback.cpp
-        src/D3D12/ReadOnlyFrameLifetimeTracker.cpp
-        src/D3D12/D3D12DummyCameraCapture.cpp
-        src/D3D12/D3D12DummyCameraCaptureGenerator.cpp
-        src/D3D12/D3D12CameraCapture.cpp
-        src/D3D12/D3D12CameraCaptureThread.cpp
-        src/D3D12/D3D12FrameSyncThread.cpp
-        src/V2/D3D12/D3D12ReadOnlyFrame.cpp
-        src/V2/D3D12/D3D12FramePool.cpp
-        src/V2/D3D12/D3D12PooledFrameConverter.cpp
-        src/V2/D3D12/D3D12CameraCapture.cpp
-        src/V2/D3D12/D3D12CameraCaptureThread.cpp
-        src/V2/D3D12/D3D12ReadOnlyFrameSet.cpp
-        src/V2/D3D12/D3D12FrameSyncThread.cpp)
+        src/D3D12/ReadOnlyFrame.cpp
+        src/D3D12/ReadOnlyFrameSet.cpp
+        src/D3D12/FramePool.cpp
+        src/D3D12/PooledFrameConverter.cpp
+        src/D3D12/ReadOnlyCameraCapture.cpp
+        src/D3D12/ReadOnlyCameraCaptureThread.cpp
+        src/D3D12/TimestampFrameSyncThread.cpp
+        src/D3D12/ReadOnlyFrameLifetimeTracker.cpp)
 endif()
 
 add_library(IC4Ext STATIC ${IC4EXT_SOURCES})
@@ -298,8 +292,9 @@ if(IC4EXT_BUILD_SAMPLES)
         add_subdirectory(samples/SingleCameraReadback)
     endif()
     if(IC4EXT_ENABLE_D3D12)
-        add_subdirectory(samples/SingleCameraLogD3D12)
-        add_subdirectory(samples/SingleCameraReadbackD3D12)
+        add_subdirectory(samples/IC4DeviceDiagnostics)
+        add_subdirectory(samples/SingleCameraReadOnlyReadbackD3D12)
+        add_subdirectory(samples/MultiCameraReadOnlySyncD3D12)
     endif()
 endif()
 
