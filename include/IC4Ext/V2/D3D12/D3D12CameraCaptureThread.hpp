@@ -4,12 +4,14 @@
 #include "IC4Ext/Core/Error.hpp"
 #include "IC4Ext/Core/IC4DeviceSelector.hpp"
 #include "IC4Ext/D3D12/D3D12BackendContext.hpp"
+#include "IC4Ext/D3D12/ReadOnlyFrameSource.hpp"
 #include "IC4Ext/V2/Core/FrameSyncTypes.hpp"
 #include "IC4Ext/V2/D3D12/D3D12CameraCapture.hpp"
 #include "IC4Ext/V2/D3D12/D3D12FrameQueues.hpp"
 
 #include <cstdint>
 #include <memory>
+#include <string>
 
 namespace IC4Ext::V2 {
 
@@ -32,10 +34,10 @@ struct D3D12CameraCaptureThreadStats
     std::uint64_t noOutputDrops = 0;
 };
 
-// Continuously reads immutable frames from one v2 capture and publishes them to
-// the single central FrameSyncThread ingress queue. There is intentionally no
+// Continuously reads immutable frames from one source and publishes them to the
+// single central FrameSyncThread ingress queue. There is intentionally no
 // per-output GPU copy or fan-out in this class; fan-out belongs to the central
-// D3D12FrameSyncThread after a complete synchronized set has been assembled.
+// timestamp synchronization thread after a complete set has been assembled.
 class D3D12CameraCaptureThread final
 {
 public:
@@ -50,6 +52,13 @@ public:
     D3D12CameraCaptureThread(
         CameraId cameraId,
         D3D12CameraCapture&& capture,
+        D3D12CameraCaptureThreadOptions threadOptions = {});
+
+    // Test/custom-source path. The source must already report isOpened()==true.
+    // It is retained for the lifetime of the capture thread.
+    D3D12CameraCaptureThread(
+        CameraId cameraId,
+        std::shared_ptr<::IC4Ext::D3D12::ReadOnlyFrameSource> source,
         D3D12CameraCaptureThreadOptions threadOptions = {});
 
     ~D3D12CameraCaptureThread();
