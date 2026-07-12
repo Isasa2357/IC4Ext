@@ -19,6 +19,8 @@ int main()
     static_assert(!std::is_copy_constructible_v<CameraCaptureThread>);
     static_assert(!std::is_move_constructible_v<CameraCaptureThread>);
     static_assert(!std::is_copy_constructible_v<ReadOnlyFrameLifetimeTracker>);
+    static_assert(!std::is_copy_constructible_v<SyntheticFrameSource>);
+    static_assert(!std::is_move_constructible_v<SyntheticFrameSource>);
 
     ReadOnlyFrame emptyFrame;
     assert(!emptyFrame.valid());
@@ -48,6 +50,33 @@ int main()
     emptyPoolStats.available = 0;
     emptyPoolStats.capacity = 16;
     assert(emptyPoolStats.exhausted());
+
+    SyntheticFrameSourceConfig syntheticConfig;
+    syntheticConfig.width = 1920;
+    syntheticConfig.height = 1080;
+    syntheticConfig.fps = 160.0;
+    syntheticConfig.pattern = SyntheticFramePattern::HashNoise;
+    syntheticConfig.deviceTimestampOffsetNs = 500'000;
+    syntheticConfig.initialFramePoolCapacity = 16;
+    syntheticConfig.maxFramePoolCapacity = 64;
+    assert(syntheticConfig.isValid());
+    assert(syntheticConfig.framePeriodNs() == 6'250'000ull);
+
+    auto invalidSynthetic = syntheticConfig;
+    invalidSynthetic.width = 0;
+    assert(!invalidSynthetic.isValid());
+    invalidSynthetic = syntheticConfig;
+    invalidSynthetic.fps = 0.0;
+    assert(!invalidSynthetic.isValid());
+    invalidSynthetic = syntheticConfig;
+    invalidSynthetic.fps = 2'000'000'000.0;
+    assert(!invalidSynthetic.isValid());
+    invalidSynthetic = syntheticConfig;
+    invalidSynthetic.maxFramePoolCapacity = 8;
+    assert(!invalidSynthetic.isValid());
+    invalidSynthetic = syntheticConfig;
+    invalidSynthetic.pattern = static_cast<SyntheticFramePattern>(999u);
+    assert(!invalidSynthetic.isValid());
 
     assert(FrameRateLimit::Maximum().isValid());
     assert(FrameRateLimit::Fixed(60.0).isValid());
