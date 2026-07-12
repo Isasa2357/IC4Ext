@@ -155,6 +155,8 @@ public:
     {
         CameraId cameraId = 0;
         std::deque<D3D12IndexedReadOnlyCameraFrame> frames;
+        bool hasRelativeFrameBase = false;
+        std::uint64_t relativeFrameBase = 0;
     };
 
     struct CompleteFrameSet
@@ -181,12 +183,17 @@ public:
             return false;
         }
 
+        if (worker.joinable()) {
+            worker.join();
+        }
+
         buffers.clear();
         buffers.reserve(configValue.cameraIds.size());
         for (CameraId cameraId : configValue.cameraIds) {
-            buffers.push_back(CameraBuffer{cameraId, {}});
+            buffers.push_back(CameraBuffer{cameraId, {}, false, 0});
         }
         nextSyncGroupId = 1;
+        resetStats();
         stopRequested.store(false, std::memory_order_release);
         running.store(true, std::memory_order_release);
         try {
@@ -467,6 +474,12 @@ private:
         lastErrorValue = NoError();
     }
 
+    void resetStats()
+    {
+        std::lock_guard<std::mutex> lock(statsMutex);
+        statsValue = {};
+    }
+
     void workerLoop() noexcept
     {
         try {
@@ -496,6 +509,10 @@ private:
         if (!buffer) {
             incrementStat([](FrameSyncStats& value) { ++value.ignoredFrames; });
             return;
+        }
+        if (configValue.policy == FrameSyncPolicy::FrameNumberRelative && !buffer->hasRelativeFrameBase) {
+            buffer->hasRelativeFrameBase = true;
+            buffer->relativeFrameBase = frame.frame.timing().frameNumber;
         }
         buffer->frames.push_back(std::move(frame));
         trimBuffer(*buffer);
@@ -559,25 +576,41 @@ private:
 
     void tryEmitCompleteSets()
     {
-        if (configValue.policy == FrameSyncPolicy::FrameNumberExact) {
-            tryEmitFrameNumberExactSets();
-        } else {
+        switch (configValue.policy) {
+        case FrameSyncPolicy::FrameNumberExact:
+            tryEmitFrameNumberSets(false);
+            break;
+        case FrameSyncPolicy::FrameNumberRelative:
+            tryEmitFrameNumberSets(true);
+            break;
+        case FrameSyncPolicy::TimestampNearest:
+        default:
             tryEmitTimestampNearestSets();
+            break;
         }
     }
 
-    void tryEmitFrameNumberExactSets()
+    std::uint64_t frameNumberKey(const CameraBuffer& buffer) const noexcept
     {
+        if (buffer.frames.empty()) return 0;
+        const auto frameNumber = buffer.frames.front().frame.timing().frameNumber;
+        if (configValue.policy != FrameSyncPolicy::FrameNumberRelative) return frameNumber;
+        if (!buffer.hasRelativeFrameBase || frameNumber < buffer.relativeFrameBase) return 0;
+        return frameNumber - buffer.relativeFrameBase;
+    }
+
+    void tryEmitFrameNumberSets(bool relative)
+    {
+        (void)relative;
         while (allBuffersHaveFrames()) {
             std::uint64_t target = 0;
             for (const auto& buffer : buffers) {
-                target = std::max(target, buffer.frames.front().frame.timing().frameNumber);
+                target = std::max(target, frameNumberKey(buffer));
             }
 
             bool dropped = false;
             for (auto& buffer : buffers) {
-                while (!buffer.frames.empty() &&
-                       buffer.frames.front().frame.timing().frameNumber < target) {
+                while (!buffer.frames.empty() && frameNumberKey(buffer) < target) {
                     dropFront(buffer);
                     dropped = true;
                 }
@@ -587,7 +620,7 @@ private:
 
             bool allMatch = true;
             for (const auto& buffer : buffers) {
-                if (buffer.frames.front().frame.timing().frameNumber != target) {
+                if (frameNumberKey(buffer) != target) {
                     allMatch = false;
                     break;
                 }
