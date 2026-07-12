@@ -2,6 +2,7 @@
 
 #include "IC4Ext/D3D12/CameraCapture.hpp"
 #include "IC4Ext/D3D12/FrameQueues.hpp"
+#include "IC4Ext/D3D12/ReadOnlyFrameSource.hpp"
 
 #define V2 D3D12
 #include "IC4Ext/V2/D3D12/D3D12CameraCaptureThread.hpp"
