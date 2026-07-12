@@ -51,8 +51,17 @@ struct FrameRateLimit
 
 enum class FrameSyncPolicy : std::uint32_t
 {
+    // Match camera-provided frame numbers by absolute value.
+    // Use only when all cameras expose the same counter domain.
     FrameNumberExact = 0,
-    TimestampNearest = 1,
+
+    // Match camera-provided frame numbers after subtracting each camera's first
+    // observed frame number in this sync thread. This is useful for hardware
+    // triggered cameras whose device counters start from different values.
+    FrameNumberRelative = 1,
+
+    // Match nearest timestamps within maxTimestampDiffNs.
+    TimestampNearest = 2,
 };
 
 enum class FrameSyncTimestampSource : std::uint32_t
