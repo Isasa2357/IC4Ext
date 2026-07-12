@@ -36,6 +36,26 @@ if(IC4EXT_ENABLE_D3D11)
     ic4ext_add_no_camera_test(test_d3d11_dummy_camera_capture test_d3d11_dummy_camera_capture.cpp)
     ic4ext_add_no_camera_test(test_d3d11_frame_sync_thread test_d3d11_frame_sync_thread.cpp)
 
+    ic4ext_add_no_camera_test(
+        test_d3d11_readonly_pipeline
+        test_d3d11_readonly_pipeline.cpp)
+
+    ic4ext_add_no_camera_test(
+        test_d3d11_pooled_converter_device
+        test_d3d11_pooled_converter_device.cpp)
+    set_tests_properties(test_d3d11_pooled_converter_device PROPERTIES
+        LABELS "no_camera;d3d11_device"
+        SKIP_RETURN_CODE 77
+        TIMEOUT 120)
+
+    ic4ext_add_no_camera_test(
+        test_d3d11_synthetic_source_sync_integration
+        test_d3d11_synthetic_source_sync_integration.cpp)
+    set_tests_properties(test_d3d11_synthetic_source_sync_integration PROPERTIES
+        LABELS "no_camera;d3d11_device;integration;synthetic"
+        SKIP_RETURN_CODE 77
+        TIMEOUT 120)
+
     ic4ext_add_camera_test(test_single_camera_smoke camera1 test_single_camera_smoke.cpp)
 
     ic4ext_add_camera_test(test_camera1_readback_integration camera1 test_camera1_readback_integration.cpp)
