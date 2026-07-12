@@ -20,6 +20,31 @@ int main()
     static_assert(!std::is_move_constructible_v<CameraCaptureThread>);
     static_assert(!std::is_copy_constructible_v<ReadOnlyFrameLifetimeTracker>);
 
+    ReadOnlyFrame emptyFrame;
+    assert(!emptyFrame.valid());
+    assert(!emptyFrame.hasResource());
+    assert(!emptyFrame.hasSrv());
+    assert(emptyFrame.isReady());
+    assert(emptyFrame.waitReady(0));
+    assert(emptyFrame.useCount() == 0);
+    assert(!emptyFrame.unique());
+
+    FramePoolStats emptyPoolStats;
+    assert(emptyPoolStats.inFlight() == 0);
+    assert(emptyPoolStats.availableRatio() == 0.0);
+    assert(emptyPoolStats.inFlightRatio() == 0.0);
+    assert(emptyPoolStats.exhausted());
+
+    emptyPoolStats.capacity = 8;
+    emptyPoolStats.maxCapacity = 16;
+    emptyPoolStats.available = 3;
+    emptyPoolStats.writing = 2;
+    emptyPoolStats.published = 1;
+    assert(emptyPoolStats.inFlight() == 3);
+    assert(emptyPoolStats.availableRatio() == 3.0 / 8.0);
+    assert(emptyPoolStats.inFlightRatio() == 3.0 / 8.0);
+    assert(!emptyPoolStats.exhausted());
+
     assert(FrameRateLimit::Maximum().isValid());
     assert(FrameRateLimit::Fixed(60.0).isValid());
     assert(!FrameRateLimit::Fixed(0.0).isValid());
