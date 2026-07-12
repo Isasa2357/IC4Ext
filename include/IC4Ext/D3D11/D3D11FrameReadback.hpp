@@ -3,6 +3,7 @@
 #include "IC4Ext/Core/CpuFrame.hpp"
 #include "IC4Ext/Core/Error.hpp"
 #include "IC4Ext/D3D11/D3D11CameraFrame.hpp"
+#include "IC4Ext/D3D11/D3D11ContextSynchronization.hpp"
 #include "IC4Ext/D3D11/ReadOnlyFrame.hpp"
 
 #include <D3D11Helper/D3D11Core/D3D11Core.hpp>
@@ -11,6 +12,8 @@
 #include <wrl/client.h>
 
 #include <cstdint>
+#include <memory>
+#include <mutex>
 
 namespace IC4Ext {
 
@@ -54,6 +57,7 @@ private:
     D3D11CoreLib::D3D11Core* core_ = nullptr;
     Microsoft::WRL::ComPtr<ID3D11Device> device_;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
+    std::shared_ptr<std::recursive_mutex> contextMutex_;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> stagingTexture_;
     D3D11_TEXTURE2D_DESC stagingDesc_{};
     bool hasStagingDesc_ = false;
