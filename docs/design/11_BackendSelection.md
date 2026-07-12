@@ -1,54 +1,136 @@
-# 11. Backend Selection
+# 11. Backend selection
 
-## Purpose
+IC4ExtはCMake optionとpublic compile definitionでD3D11/D3D12 backendを選択する。
 
-IC4Ext supports selecting which graphics backend is exposed and built. The selection must work both at CMake target level and at aggregate-header include level.
-
-## Public macros
-
-The aggregate header `IC4Ext/IC4Ext.hpp` includes `IC4Ext/BackendConfig.hpp` first. The following macros decide which backend headers are pulled in:
+## 1. Public macros
 
 ```cpp
 IC4EXT_ENABLE_D3D11
 IC4EXT_ENABLE_D3D12
 ```
 
-At least one must be `1`.
+CMake target `IC4Ext::IC4Ext`は、configure optionに応じて両macroをpublic definitionとして設定する。
 
-CMake defines both macros publicly on target `IC4Ext` according to the options below. If a user includes headers manually without CMake, `BackendConfig.hpp` defaults to D3D11-only mode:
-
-```cpp
-IC4EXT_ENABLE_D3D11 = 1
-IC4EXT_ENABLE_D3D12 = 0
-```
-
-## CMake options
+## 2. CMake options
 
 ```cmake
 option(IC4EXT_ENABLE_D3D11 "Build and expose the D3D11 backend" ON)
 option(IC4EXT_ENABLE_D3D12 "Build and expose the D3D12 backend" ON)
 ```
 
-These options control:
+これらは次を制御する。
 
-- backend source file registration,
-- helper dependency fetching,
-- helper include directories,
-- helper target linking,
-- system library linking,
-- sample registration,
-- test registration,
-- public preprocessor definitions.
-
-## Common control definitions
-
-`CameraControlCommand` and `ICameraControlSink` live under `IC4Ext/Core/CameraControl.hpp`. D3D11 and D3D12 expose backend-specific aliases:
-
-```cpp
-using D3D11CameraControlCommand = CameraControlCommand;
-using D3D12CameraControlCommand = CameraControlCommand;
-using ID3D11CameraControlSink = ICameraControlSink;
-using ID3D12CameraControlSink = ICameraControlSink;
+```text
+backend source registration
+helper dependency fetch
+include directories
+target linking
+system libraries
+sample registration
+test registration
+public preprocessor definitions
 ```
 
-This avoids D3D12 headers depending on D3D11 headers when `IC4EXT_ENABLE_D3D11=OFF`.
+少なくとも利用するbackendを1つ有効にする。
+
+## 3. D3D12 public include
+
+D3D12 2.0.0の正式なpublic entryは次である。
+
+```cpp
+#include <IC4Ext/D3D12/ReadOnlyPipeline.hpp>
+namespace Pipe = IC4Ext::D3D12;
+```
+
+D3D12だけをbuildする例:
+
+```bat
+cmake -S . -B out\build\v2_d3d12 ^
+  -DIC4EXT_ENABLE_D3D11=OFF ^
+  -DIC4EXT_ENABLE_D3D12=ON
+```
+
+旧D3D12 camera/thread/sync/copier headerを直接includeしない。
+
+## 4. Aggregate header
+
+```cpp
+#include <IC4Ext/IC4Ext.hpp>
+```
+
+aggregate headerはCMake definitionに応じてbackend headerをincludeする。ただしD3D12の意図を明確にするため、新規コードでは`ReadOnlyPipeline.hpp`の直接includeを推奨する。
+
+## 5. Backend asymmetry
+
+D3D11とD3D12は同じCore型を共有するが、camera pipelineのpublic modelは現在異なる。
+
+```text
+D3D11
+  existing mutable/copy-based frame pipeline
+
+D3D12
+  ReadOnlyFrame + CameraCapture-owned FramePool
+  one central timestamp FrameSyncThread
+  shared immutable fan-out
+```
+
+applicationはbackend固有classを明示して扱う。無理に1つの共通virtual APIへ統合しない。
+
+## 6. Common Core definitions
+
+次はbackend非依存である。
+
+```text
+CameraCaptureConfig
+CameraReadOptions
+CameraSyncConfig
+FrameTiming
+FrameFormatMetadata
+FrameChunkMetadata
+CpuFrame
+ErrorInfo
+CameraPerformanceSnapshot
+```
+
+## 7. D3D12 backend context
+
+D3D12は`D3D12BackendContext`を使う。
+
+```cpp
+auto core = D3D12CoreLib::D3D12Core::CreateShared();
+auto backend = IC4Ext::D3D12BackendContext::FromCore(core);
+```
+
+raw device/queue pointerだけを渡す初期化は正式経路ではない。
+
+## 8. Dependency selection
+
+```text
+D3D11 enabled -> D3D11Helper v1.12.1
+D3D12 enabled -> D3D12Helper v1.12.1
+both          -> both helpers
+```
+
+ThreadKitとnlohmann/jsonは共通依存である。
+
+## 9. Sample/test selection
+
+D3D12のみの場合:
+
+```text
+IC4DeviceDiagnostics
+SingleCameraReadOnlyReadbackD3D12
+MultiCameraReadOnlySyncD3D12
+MultiPipelineStressD3D12
+D3D12 no-camera/device tests
+```
+
+OpenCVはstress sampleだけが要求する。IC4Ext library本体の依存ではない。
+
+## 10. Related documents
+
+```text
+docs/d3d12/READONLY_PIPELINE.md
+docs/design/10_D3D12Backend.md
+docs/design/14_CurrentStatusAndRoadmap.md
+```
