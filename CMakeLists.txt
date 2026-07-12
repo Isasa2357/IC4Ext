@@ -183,6 +183,7 @@ if(IC4EXT_ENABLE_D3D12)
         src/D3D12/D3D12FrameConverter.cpp
         src/D3D12/D3D12FrameCopier.cpp
         src/D3D12/D3D12FrameReadback.cpp
+        src/D3D12/ReadOnlyFrameLifetimeTracker.cpp
         src/D3D12/D3D12DummyCameraCapture.cpp
         src/D3D12/D3D12DummyCameraCaptureGenerator.cpp
         src/D3D12/D3D12CameraCapture.cpp
