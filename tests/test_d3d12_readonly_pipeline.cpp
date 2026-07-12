@@ -18,6 +18,7 @@ int main()
     static_assert(std::is_move_constructible_v<CameraCapture>);
     static_assert(!std::is_copy_constructible_v<CameraCaptureThread>);
     static_assert(!std::is_move_constructible_v<CameraCaptureThread>);
+    static_assert(!std::is_copy_constructible_v<ReadOnlyFrameLifetimeTracker>);
 
     assert(FrameRateLimit::Maximum().isValid());
     assert(FrameRateLimit::Fixed(60.0).isValid());
@@ -76,6 +77,16 @@ int main()
     output.frameRate = FrameRateLimit::Fixed(30.0);
     output.priority = 100;
     assert(output.frameRate.isValid());
+
+    ReadOnlyFrameLifetimeTracker lifetimeTracker;
+    assert(lifetimeTracker.retainedFrameCount() == 0);
+    assert(lifetimeTracker.collectCompleted() == 0);
+    assert(lifetimeTracker.waitAllAndClear(0));
+    assert(!lifetimeTracker.retainUntil(ReadOnlyFrame{}, ::IC4Ext::D3D12ReadyToken{}));
+    assert(!lifetimeTracker.retainUntil(set, ::IC4Ext::D3D12ReadyToken{}));
+    const auto lifetimeStats = lifetimeTracker.stats();
+    assert(lifetimeStats.retainedFrames == 0);
+    assert(lifetimeStats.retainedTotal == 0);
 
     CameraCapture capture;
     assert(!capture.isOpened());
