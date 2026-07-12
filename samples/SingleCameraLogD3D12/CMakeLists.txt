@@ -15,5 +15,13 @@ add_subdirectory(
     "${CMAKE_CURRENT_BINARY_DIR}/IC4DeviceDiagnostics")
 
 add_subdirectory(
+    "${CMAKE_CURRENT_LIST_DIR}/../SingleCameraReadOnlyReadbackD3D12"
+    "${CMAKE_CURRENT_BINARY_DIR}/SingleCameraReadOnlyReadbackD3D12")
+
+add_subdirectory(
+    "${CMAKE_CURRENT_LIST_DIR}/../MultiCameraReadOnlySyncD3D12"
+    "${CMAKE_CURRENT_BINARY_DIR}/MultiCameraReadOnlySyncD3D12")
+
+add_subdirectory(
     "${CMAKE_CURRENT_LIST_DIR}/../MultiCameraSyncDisplayD3D12"
     "${CMAKE_CURRENT_BINARY_DIR}/MultiCameraSyncDisplayD3D12")
