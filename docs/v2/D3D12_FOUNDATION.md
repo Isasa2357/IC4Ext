@@ -1,8 +1,8 @@
 # IC4Ext v2.0.0 D3D12 foundation
 
-This branch introduces the v2 D3D12 API alongside the existing v1 API so that the migration can remain buildable while CameraCapture and CameraCaptureThread are moved in later commits.
+This branch introduces the v2 D3D12 API alongside the existing v1 API so that the migration remains buildable while applications move to immutable pooled frames.
 
-## Implemented in this foundation
+## Implemented
 
 - `IC4Ext::V2::D3D12ReadOnlyFrame`
   - shared immutable frame handle
@@ -18,6 +18,18 @@ This branch introduces the v2 D3D12 API alongside the existing v1 API so that th
   - writes directly into a frame-pool lease
   - copies the pool UAV descriptor into the converter's per-slot descriptor heap
   - publishes the completed texture as a read-only frame after queue signaling
+- `IC4Ext::V2::D3D12CameraCapture`
+  - owns the pooled producer path
+  - opens IC4 devices with the existing `CameraCaptureConfig`
+  - lazily creates or replaces the frame pool from the negotiated frame shape
+  - returns `D3D12ReadOnlyFrame` from `read()`
+  - preserves hardware/software trigger and property control APIs
+  - exposes capture and frame-pool statistics
+- `IC4Ext::V2::D3D12CameraCaptureThread`
+  - continuously reads `D3D12ReadOnlyFrame`
+  - submits one shared handle to the central sync ingress queue
+  - has no physical GPU-copy fan-out path
+  - supports runtime replacement of the central ingress queue
 - `IC4Ext::V2::D3D12ReadOnlyFrameSet`
   - immutable selected-camera frame set
 - `IC4Ext::V2::D3D12FrameSyncThread`
@@ -28,6 +40,23 @@ This branch introduces the v2 D3D12 API alongside the existing v1 API so that th
   - priority-ordered dispatch
   - bounded ThreadKit output queues
 
+## End-to-end v2 D3D12 path
+
+```text
+IC4 camera buffer
+    -> D3D12CameraCapture
+    -> existing UploadRing and compute conversion
+    -> CameraCapture-owned D3D12FramePool texture
+    -> D3D12ReadOnlyFrame
+    -> D3D12CameraCaptureThread
+    -> central D3D12FrameSyncThread input queue
+    -> complete synchronized set
+    -> priority/FPS/required-camera output selection
+    -> processing queues
+```
+
+No output texture is duplicated by `D3D12CameraCaptureThread` or `D3D12FrameSyncThread`.
+
 ## Deliberately retained from v1.x
 
 Dependency versions remain unchanged:
@@ -37,16 +66,23 @@ Dependency versions remain unchanged:
 - ThreadKit `main`
 - nlohmann/json `v3.11.3`
 
-The existing v1 D3D11 and D3D12 APIs remain compiled during the migration. New code is temporarily placed in `IC4Ext::V2` and `include/IC4Ext/V2` until the v2 capture path is complete.
+The existing v1 D3D11 and D3D12 APIs remain compiled during the migration. New code is temporarily placed in `IC4Ext::V2` and `include/IC4Ext/V2`.
 
-## Next D3D12 implementation steps
+## Lifecycle contract
 
-1. Make `D3D12CameraCapture` own and lazily configure `D3D12FramePool` from the negotiated frame shape.
-2. Add the v2 capture read result returning `D3D12ReadOnlyFrame`.
-3. Replace CameraCaptureThread physical-copy fan-out with shared read-only handle delivery.
-4. Add a real D3D12 device pool/converter test and dummy-camera synchronization tests.
-5. Add consumer-side GPU lifetime retention helpers.
-6. Remove the v1 physical-copy fan-out path after migration samples are complete.
+The owning application must stop and join `D3D12CameraCaptureThread` before closing or destroying its capture. A processing consumer must retain every input `D3D12ReadOnlyFrame` until the consumer's GPU work that reads the frame has completed.
+
+The capture waits for its producer queue to become idle during normal close. Published frames can outlive the capture because they retain the pool state and D3D12 resource references independently.
+
+## Remaining D3D12 work
+
+1. Add a reusable consumer-side GPU lifetime tracker and queue-wait helper.
+2. Reuse the pooled converter's per-slot default-heap input buffers instead of rebuilding them for each conversion.
+3. Add a real D3D12 device pool/converter test.
+4. Add dummy-camera capture-thread-to-sync-thread integration tests.
+5. Add real two-camera 160 fps stress and runtime-output-update tests.
+6. Add a migration sample using hardware trigger, two capture threads and one central sync thread.
+7. Remove the v1 physical-copy fan-out path after migration samples are complete.
 
 ## Resource-state contract
 
