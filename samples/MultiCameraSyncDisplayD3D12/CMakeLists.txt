@@ -28,6 +28,7 @@ endif()
 
 add_executable(MultiCameraSyncDisplayD3D12 main.cpp)
 target_link_libraries(MultiCameraSyncDisplayD3D12 PRIVATE IC4Ext::IC4Ext user32 gdi32 d3d12 dxgi)
+ic4ext_copy_dxc_runtime_to_target(MultiCameraSyncDisplayD3D12)
 
 if(TARGET D3DVideoEncoder::D3DVideoEncoder)
     target_link_libraries(MultiCameraSyncDisplayD3D12 PRIVATE D3DVideoEncoder::D3DVideoEncoder)
