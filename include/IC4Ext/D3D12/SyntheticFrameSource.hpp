@@ -55,8 +55,8 @@ struct SyntheticFrameSourceConfig
     bool isValid() const noexcept
     {
         const double period = 1'000'000'000.0 / fps;
-        const double maximumPeriod =
-            static_cast<double>(std::numeric_limits<std::uint64_t>::max() - 1ull);
+        const double maximumPeriod = static_cast<double>(
+            std::numeric_limits<std::chrono::nanoseconds::rep>::max());
         return width > 0 && height > 0 &&
                width <= static_cast<std::uint32_t>(std::numeric_limits<int>::max()) &&
                height <= static_cast<std::uint32_t>(std::numeric_limits<int>::max()) &&
@@ -73,8 +73,8 @@ struct SyntheticFrameSourceConfig
     {
         if (!std::isfinite(fps) || fps <= 0.0) return 0;
         const double period = 1'000'000'000.0 / fps;
-        const double maximumPeriod =
-            static_cast<double>(std::numeric_limits<std::uint64_t>::max() - 1ull);
+        const double maximumPeriod = static_cast<double>(
+            std::numeric_limits<std::chrono::nanoseconds::rep>::max());
         if (!std::isfinite(period) || period < 1.0 || period > maximumPeriod) {
             return 0;
         }
