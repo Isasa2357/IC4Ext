@@ -1,6 +1,7 @@
 function(ic4ext_add_no_camera_test name)
     add_executable(${name} ${ARGN})
     target_link_libraries(${name} PRIVATE IC4Ext::IC4Ext)
+    ic4ext_copy_dxc_runtime_to_target(${name})
     add_test(NAME ${name} COMMAND ${name})
     set_tests_properties(${name} PROPERTIES
         LABELS "no_camera"
@@ -10,6 +11,7 @@ endfunction()
 function(ic4ext_add_camera_test name label)
     add_executable(${name} ${ARGN})
     target_link_libraries(${name} PRIVATE IC4Ext::IC4Ext)
+    ic4ext_copy_dxc_runtime_to_target(${name})
     add_test(NAME ${name} COMMAND ${name})
     set_tests_properties(${name} PROPERTIES
         LABELS "${label}"
