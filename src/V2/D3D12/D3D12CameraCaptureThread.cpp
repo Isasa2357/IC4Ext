@@ -240,6 +240,13 @@ bool D3D12CameraCaptureThread::start()
 {
     if (!impl_) return false;
     if (impl_->running.load()) return true;
+
+    // A finished std::thread remains joinable. Join it before assigning a new
+    // worker so start-stop-start is supported without std::terminate().
+    if (impl_->worker.joinable()) {
+        impl_->worker.join();
+    }
+
     if (!impl_->openCapture()) return false;
 
     impl_->stopRequested.store(false);
@@ -313,6 +320,7 @@ bool D3D12CameraCaptureThread::startAcquisition()
     if (!impl_ || !impl_->capture) return false;
     const bool ok = impl_->capture->startAcquisition();
     if (!ok) impl_->setError(impl_->capture->lastError());
+    else impl_->clearError();
     return ok;
 }
 
@@ -321,6 +329,7 @@ bool D3D12CameraCaptureThread::stopAcquisition()
     if (!impl_ || !impl_->capture) return false;
     const bool ok = impl_->capture->stopAcquisition();
     if (!ok) impl_->setError(impl_->capture->lastError());
+    else impl_->clearError();
     return ok;
 }
 
@@ -329,6 +338,7 @@ bool D3D12CameraCaptureThread::softwareTrigger(const std::string& commandName)
     if (!impl_ || !impl_->capture) return false;
     const bool ok = impl_->capture->softwareTrigger(commandName);
     if (!ok) impl_->setError(impl_->capture->lastError());
+    else impl_->clearError();
     return ok;
 }
 
@@ -339,6 +349,7 @@ bool D3D12CameraCaptureThread::setIC4Property(
     if (!impl_ || !impl_->capture) return false;
     const bool ok = impl_->capture->setIC4Property(propertyName, value);
     if (!ok) impl_->setError(impl_->capture->lastError());
+    else impl_->clearError();
     return ok;
 }
 
@@ -349,6 +360,7 @@ bool D3D12CameraCaptureThread::setIC4Property(
     if (!impl_ || !impl_->capture) return false;
     const bool ok = impl_->capture->setIC4Property(propertyName, value);
     if (!ok) impl_->setError(impl_->capture->lastError());
+    else impl_->clearError();
     return ok;
 }
 
@@ -359,6 +371,7 @@ bool D3D12CameraCaptureThread::setIC4Property(
     if (!impl_ || !impl_->capture) return false;
     const bool ok = impl_->capture->setIC4Property(propertyName, value);
     if (!ok) impl_->setError(impl_->capture->lastError());
+    else impl_->clearError();
     return ok;
 }
 
@@ -369,6 +382,7 @@ bool D3D12CameraCaptureThread::setIC4Property(
     if (!impl_ || !impl_->capture) return false;
     const bool ok = impl_->capture->setIC4Property(propertyName, value);
     if (!ok) impl_->setError(impl_->capture->lastError());
+    else impl_->clearError();
     return ok;
 }
 
