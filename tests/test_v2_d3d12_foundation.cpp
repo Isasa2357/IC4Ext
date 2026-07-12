@@ -1,11 +1,14 @@
 #include "IC4Ext/V2/Core/FrameSyncOutputConfig.hpp"
 #include "IC4Ext/V2/Core/FrameSyncTypes.hpp"
+#include "IC4Ext/V2/D3D12/D3D12CameraCapture.hpp"
+#include "IC4Ext/V2/D3D12/D3D12CameraCaptureThread.hpp"
 #include "IC4Ext/V2/D3D12/D3D12FramePool.hpp"
 #include "IC4Ext/V2/D3D12/D3D12PooledFrameConverter.hpp"
 #include "IC4Ext/V2/D3D12/D3D12ReadOnlyFrameSet.hpp"
 
 #include <cassert>
 #include <chrono>
+#include <memory>
 #include <type_traits>
 #include <utility>
 
@@ -17,6 +20,10 @@ int main()
     static_assert(std::is_move_constructible_v<D3D12FrameWriter>);
     static_assert(!std::is_copy_constructible_v<D3D12PooledFrameConverter>);
     static_assert(std::is_move_constructible_v<D3D12PooledFrameConverter>);
+    static_assert(!std::is_copy_constructible_v<D3D12CameraCapture>);
+    static_assert(std::is_move_constructible_v<D3D12CameraCapture>);
+    static_assert(!std::is_copy_constructible_v<D3D12CameraCaptureThread>);
+    static_assert(!std::is_move_constructible_v<D3D12CameraCaptureThread>);
 
     assert(FrameRateLimit::Maximum().isValid());
     assert(FrameRateLimit::Fixed(60.0).isValid());
@@ -37,6 +44,16 @@ int main()
     assert(poolConfig.isValid());
     poolConfig.createSrv = false;
     assert(!poolConfig.isValid());
+
+    D3D12CameraCaptureOptions captureOptions;
+    assert(captureOptions.isValid());
+    captureOptions.maxFramePoolCapacity = 0;
+    assert(!captureOptions.isValid());
+
+    D3D12CameraCaptureThreadOptions threadOptions;
+    assert(threadOptions.isValid());
+    threadOptions.readTimeoutMs = 0;
+    assert(!threadOptions.isValid());
 
     D3D12ReadOnlyFrameSet::FrameList frames;
     frames.push_back(D3D12IndexedReadOnlyFrame{1, {}});
@@ -60,6 +77,17 @@ int main()
     output.frameRate = FrameRateLimit::Fixed(30.0);
     output.priority = 100;
     assert(output.frameRate.isValid());
+
+    D3D12CameraCapture capture;
+    assert(!capture.isOpened());
+
+    auto ingress = std::make_shared<D3D12IndexedReadOnlyFrameQueue>(4);
+    D3D12CameraCaptureThread captureThread(7, std::move(capture));
+    captureThread.setOutputQueue(ingress);
+    assert(captureThread.cameraId() == 7);
+    assert(captureThread.outputQueue() == ingress);
+    assert(!captureThread.isOpened());
+    assert(!captureThread.isRunning());
 
     return 0;
 }
