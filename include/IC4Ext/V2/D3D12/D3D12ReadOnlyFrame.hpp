@@ -3,9 +3,11 @@
 #include "IC4Ext/Core/CoreTypes.hpp"
 #include "IC4Ext/D3D12/D3D12ReadyToken.hpp"
 
+#include <Windows.h>
 #include <d3d12.h>
 #include <wrl/client.h>
 
+#include <cstdint>
 #include <memory>
 
 namespace IC4Ext::V2 {
@@ -20,6 +22,13 @@ public:
 
     bool valid() const noexcept;
     explicit operator bool() const noexcept { return valid(); }
+
+    bool hasResource() const noexcept { return resource() != nullptr; }
+    bool hasSrv() const noexcept { return srvCpuHandle().ptr != 0; }
+    bool isReady() const noexcept;
+    bool waitReady(std::uint32_t timeoutMs = INFINITE) const noexcept;
+    long useCount() const noexcept;
+    bool unique() const noexcept { return useCount() == 1; }
 
     ID3D12Resource* resource() const noexcept;
     ID3D12DescriptorHeap* descriptorHeap() const noexcept;
