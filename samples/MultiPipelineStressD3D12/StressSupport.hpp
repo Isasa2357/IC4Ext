@@ -101,6 +101,7 @@ private:
     D3D12CoreLib::D3D12Queue queue_;
     IC4Ext::D3D12BackendContext backend_;
     IC4Ext::D3D12FrameReadback readback_;
+    IC4Ext::ErrorInfo error_;
     bool initialized_ = false;
 };
 
