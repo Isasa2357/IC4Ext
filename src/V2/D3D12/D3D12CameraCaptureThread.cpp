@@ -18,6 +18,7 @@ public:
     {
         Internal,
         MovedCapture,
+        ExternalSource,
     };
 
     CameraId cameraId = 0;
@@ -29,6 +30,7 @@ public:
     SourceMode sourceMode = SourceMode::Internal;
 
     std::unique_ptr<D3D12CameraCapture> capture;
+    std::shared_ptr<::IC4Ext::D3D12::ReadOnlyFrameSource> externalSource;
 
     mutable std::mutex outputMutex;
     std::shared_ptr<D3D12IndexedReadOnlyFrameQueue> output;
@@ -122,14 +124,45 @@ public:
         return output;
     }
 
+    bool sourceIsOpened() const noexcept
+    {
+        if (sourceMode == SourceMode::ExternalSource) {
+            return externalSource && externalSource->isOpened();
+        }
+        return capture && capture->isOpened();
+    }
+
     bool openCapture()
     {
         if (!threadOptions.isValid()) {
             setError(
                 ErrorCode::InvalidArgument,
-                "V2::D3D12CameraCaptureThread::open",
+                "D3D12CameraCaptureThread::open",
                 "Invalid thread options");
             return false;
+        }
+
+        if (sourceMode == SourceMode::ExternalSource) {
+            if (!externalSource) {
+                setError(
+                    ErrorCode::InvalidArgument,
+                    "D3D12CameraCaptureThread::open",
+                    "External read-only frame source is null");
+                return false;
+            }
+            if (!externalSource->isOpened()) {
+                auto sourceError = externalSource->lastError();
+                if (!sourceError) {
+                    sourceError = MakeError(
+                        ErrorCode::NotOpened,
+                        "D3D12CameraCaptureThread::open",
+                        "External read-only frame source is not opened");
+                }
+                setError(std::move(sourceError));
+                return false;
+            }
+            clearError();
+            return true;
         }
 
         if (capture && capture->isOpened()) {
@@ -140,7 +173,7 @@ public:
         if (sourceMode == SourceMode::MovedCapture) {
             setError(
                 ErrorCode::NotOpened,
-                "V2::D3D12CameraCaptureThread::open",
+                "D3D12CameraCaptureThread::open",
                 "Moved capture is not opened and cannot be reopened without selector/configuration");
             return false;
         }
@@ -159,12 +192,35 @@ public:
         return true;
     }
 
+    D3D12ReadOnlyReadResult readNext()
+    {
+        const CameraReadOptions options{
+            ReadMode::NextFrame,
+            threadOptions.readTimeoutMs};
+
+        if (sourceMode != SourceMode::ExternalSource) {
+            return capture->read(options);
+        }
+
+        D3D12ReadOnlyReadResult result;
+        result.ok = externalSource->read(options, result.frame, result.error);
+        if (!result.ok && !result.error) {
+            result.error = externalSource->lastError();
+        }
+        if (result.ok && !result.frame) {
+            result.ok = false;
+            result.error = MakeError(
+                ErrorCode::InternalError,
+                "D3D12CameraCaptureThread::readNext",
+                "External source returned success with an invalid frame");
+        }
+        return result;
+    }
+
     void workerLoop()
     {
         while (!stopRequested.load()) {
-            auto result = capture->read(CameraReadOptions{
-                ReadMode::NextFrame,
-                threadOptions.readTimeoutMs});
+            auto result = readNext();
 
             if (!result) {
                 if (result.error.code == static_cast<int>(ErrorCode::Timeout)) {
@@ -193,6 +249,16 @@ public:
         }
 
         running.store(false);
+    }
+
+    D3D12CameraCapture* requireConcreteCapture(const char* where)
+    {
+        if (capture) return capture.get();
+        setError(
+            ErrorCode::InvalidArgument,
+            where,
+            "This operation is unavailable for an injected read-only frame source");
+        return nullptr;
     }
 };
 
@@ -226,6 +292,18 @@ D3D12CameraCaptureThread::D3D12CameraCaptureThread(
     impl_->sourceMode = Impl::SourceMode::MovedCapture;
 }
 
+D3D12CameraCaptureThread::D3D12CameraCaptureThread(
+    CameraId cameraId,
+    std::shared_ptr<::IC4Ext::D3D12::ReadOnlyFrameSource> source,
+    D3D12CameraCaptureThreadOptions threadOptions)
+    : impl_(std::make_unique<Impl>())
+{
+    impl_->cameraId = cameraId;
+    impl_->externalSource = std::move(source);
+    impl_->threadOptions = threadOptions;
+    impl_->sourceMode = Impl::SourceMode::ExternalSource;
+}
+
 D3D12CameraCaptureThread::~D3D12CameraCaptureThread()
 {
     stopAndJoin();
@@ -257,7 +335,7 @@ bool D3D12CameraCaptureThread::start()
         impl_->running.store(false);
         impl_->setError(
             ErrorCode::ThreadError,
-            "V2::D3D12CameraCaptureThread::start",
+            "D3D12CameraCaptureThread::start",
             exception.what());
         return false;
     }
@@ -293,7 +371,7 @@ bool D3D12CameraCaptureThread::isRunning() const noexcept
 
 bool D3D12CameraCaptureThread::isOpened() const noexcept
 {
-    return impl_ && impl_->capture && impl_->capture->isOpened();
+    return impl_ && impl_->sourceIsOpened();
 }
 
 CameraId D3D12CameraCaptureThread::cameraId() const noexcept
@@ -317,27 +395,33 @@ D3D12CameraCaptureThread::outputQueue() const
 
 bool D3D12CameraCaptureThread::startAcquisition()
 {
-    if (!impl_ || !impl_->capture) return false;
-    const bool ok = impl_->capture->startAcquisition();
-    if (!ok) impl_->setError(impl_->capture->lastError());
+    if (!impl_) return false;
+    auto* capture = impl_->requireConcreteCapture("D3D12CameraCaptureThread::startAcquisition");
+    if (!capture) return false;
+    const bool ok = capture->startAcquisition();
+    if (!ok) impl_->setError(capture->lastError());
     else impl_->clearError();
     return ok;
 }
 
 bool D3D12CameraCaptureThread::stopAcquisition()
 {
-    if (!impl_ || !impl_->capture) return false;
-    const bool ok = impl_->capture->stopAcquisition();
-    if (!ok) impl_->setError(impl_->capture->lastError());
+    if (!impl_) return false;
+    auto* capture = impl_->requireConcreteCapture("D3D12CameraCaptureThread::stopAcquisition");
+    if (!capture) return false;
+    const bool ok = capture->stopAcquisition();
+    if (!ok) impl_->setError(capture->lastError());
     else impl_->clearError();
     return ok;
 }
 
 bool D3D12CameraCaptureThread::softwareTrigger(const std::string& commandName)
 {
-    if (!impl_ || !impl_->capture) return false;
-    const bool ok = impl_->capture->softwareTrigger(commandName);
-    if (!ok) impl_->setError(impl_->capture->lastError());
+    if (!impl_) return false;
+    auto* capture = impl_->requireConcreteCapture("D3D12CameraCaptureThread::softwareTrigger");
+    if (!capture) return false;
+    const bool ok = capture->softwareTrigger(commandName);
+    if (!ok) impl_->setError(capture->lastError());
     else impl_->clearError();
     return ok;
 }
@@ -346,9 +430,11 @@ bool D3D12CameraCaptureThread::setIC4Property(
     const std::string& propertyName,
     bool value)
 {
-    if (!impl_ || !impl_->capture) return false;
-    const bool ok = impl_->capture->setIC4Property(propertyName, value);
-    if (!ok) impl_->setError(impl_->capture->lastError());
+    if (!impl_) return false;
+    auto* capture = impl_->requireConcreteCapture("D3D12CameraCaptureThread::setIC4Property");
+    if (!capture) return false;
+    const bool ok = capture->setIC4Property(propertyName, value);
+    if (!ok) impl_->setError(capture->lastError());
     else impl_->clearError();
     return ok;
 }
@@ -357,9 +443,11 @@ bool D3D12CameraCaptureThread::setIC4Property(
     const std::string& propertyName,
     std::int64_t value)
 {
-    if (!impl_ || !impl_->capture) return false;
-    const bool ok = impl_->capture->setIC4Property(propertyName, value);
-    if (!ok) impl_->setError(impl_->capture->lastError());
+    if (!impl_) return false;
+    auto* capture = impl_->requireConcreteCapture("D3D12CameraCaptureThread::setIC4Property");
+    if (!capture) return false;
+    const bool ok = capture->setIC4Property(propertyName, value);
+    if (!ok) impl_->setError(capture->lastError());
     else impl_->clearError();
     return ok;
 }
@@ -368,9 +456,11 @@ bool D3D12CameraCaptureThread::setIC4Property(
     const std::string& propertyName,
     double value)
 {
-    if (!impl_ || !impl_->capture) return false;
-    const bool ok = impl_->capture->setIC4Property(propertyName, value);
-    if (!ok) impl_->setError(impl_->capture->lastError());
+    if (!impl_) return false;
+    auto* capture = impl_->requireConcreteCapture("D3D12CameraCaptureThread::setIC4Property");
+    if (!capture) return false;
+    const bool ok = capture->setIC4Property(propertyName, value);
+    if (!ok) impl_->setError(capture->lastError());
     else impl_->clearError();
     return ok;
 }
@@ -379,9 +469,11 @@ bool D3D12CameraCaptureThread::setIC4Property(
     const std::string& propertyName,
     const std::string& value)
 {
-    if (!impl_ || !impl_->capture) return false;
-    const bool ok = impl_->capture->setIC4Property(propertyName, value);
-    if (!ok) impl_->setError(impl_->capture->lastError());
+    if (!impl_) return false;
+    auto* capture = impl_->requireConcreteCapture("D3D12CameraCaptureThread::setIC4Property");
+    if (!capture) return false;
+    const bool ok = capture->setIC4Property(propertyName, value);
+    if (!ok) impl_->setError(capture->lastError());
     else impl_->clearError();
     return ok;
 }
@@ -410,7 +502,9 @@ ErrorInfo D3D12CameraCaptureThread::lastError() const
     if (!impl_) return NoError();
     const auto threadError = impl_->getError();
     if (threadError) return threadError;
-    return impl_->capture ? impl_->capture->lastError() : NoError();
+    if (impl_->capture) return impl_->capture->lastError();
+    if (impl_->externalSource) return impl_->externalSource->lastError();
+    return NoError();
 }
 
 } // namespace IC4Ext::V2
