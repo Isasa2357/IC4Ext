@@ -17,3 +17,4 @@
 #include "IC4Ext/D3D12/ReadOnlyFrameLifetimeTracker.hpp"
 #include "IC4Ext/D3D12/ReadOnlyFrameSet.hpp"
 #include "IC4Ext/D3D12/ReadOnlyFrameSource.hpp"
+#include "IC4Ext/D3D12/SyntheticFrameSource.hpp"
