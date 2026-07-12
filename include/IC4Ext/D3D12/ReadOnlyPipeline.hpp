@@ -15,4 +15,5 @@
 #include "IC4Ext/D3D12/FrameSyncTypes.hpp"
 #include "IC4Ext/D3D12/PooledFrameConverter.hpp"
 #include "IC4Ext/D3D12/ReadOnlyFrame.hpp"
+#include "IC4Ext/D3D12/ReadOnlyFrameLifetimeTracker.hpp"
 #include "IC4Ext/D3D12/ReadOnlyFrameSet.hpp"
