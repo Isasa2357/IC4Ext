@@ -186,6 +186,7 @@ if(IC4EXT_ENABLE_D3D12)
         src/D3D12/ReadOnlyFrameSet.cpp
         src/D3D12/FramePool.cpp
         src/D3D12/PooledFrameConverter.cpp
+        src/D3D12/SyntheticFrameSource.cpp
         src/D3D12/ReadOnlyCameraCapture.cpp
         src/D3D12/ReadOnlyCameraCaptureThread.cpp
         src/D3D12/TimestampFrameSyncThread.cpp
