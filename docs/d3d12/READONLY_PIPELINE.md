@@ -24,7 +24,7 @@ The D3D12 read-only pipeline is now the D3D12 build path:
 - Public API names live under `IC4Ext::D3D12`.
 - The old D3D12 physical-copy fan-out sources are no longer built.
 - The old D3D12 camera-capture, camera-capture-thread, frame-sync-thread, and frame-copier public headers were removed.
-- Transitional wrapper source files under `src/D3D12` currently include the former implementation bodies and compile them into `IC4Ext::D3D12`. The old `include/IC4Ext/V2` and `src/V2` files are retained only as implementation source material while the code is being physically relocated; they are no longer the public API or CMake build entries.
+- Transitional wrapper source files under `src/D3D12` currently include the former implementation bodies and compile them into `IC4Ext::D3D12`. The old `include/IC4Ext/V2` and `src/V2` files remain only as implementation source material while the code is physically relocated; they are not public API or CMake build entries.
 
 ## Implemented components
 
@@ -40,7 +40,10 @@ The D3D12 read-only pipeline is now the D3D12 build path:
 - `IC4Ext::D3D12::PooledFrameConverter`
   - reuses the existing D3D12 converter shader pipelines, upload rings and command slots
   - writes directly into a frame-pool lease
-  - publishes the completed texture as a read-only frame after queue signaling
+  - keeps one default-heap input buffer cache per command slot
+  - grows a slot buffer only when a larger input is required
+  - transitions a reused buffer from shader-read to copy-destination and back
+  - exposes allocation/reuse/cache statistics through `PooledFrameConverterStats`
 - `IC4Ext::D3D12::CameraCapture`
   - owns the pooled producer path
   - opens IC4 devices with `CameraCaptureConfig`
@@ -51,6 +54,7 @@ The D3D12 read-only pipeline is now the D3D12 build path:
   - continuously reads `ReadOnlyFrame`
   - submits one shared handle to the central sync ingress queue
   - has no physical GPU-copy fan-out path
+  - accepts an injected `ReadOnlyFrameSource` for camera-free integration tests and custom producers
 - `IC4Ext::D3D12::FrameSyncThread`
   - timestamp-nearest matching only
   - runtime output registration/update/replacement/removal
@@ -86,7 +90,8 @@ For hardware-triggered cameras, prefer `timestampSource=host` first to validate 
 ```text
 IC4 camera buffer
     -> IC4Ext::D3D12::CameraCapture
-    -> existing UploadRing and compute conversion
+    -> UploadRing and compute conversion
+    -> per-slot reusable default-heap input buffer
     -> CameraCapture-owned FramePool texture
     -> ReadOnlyFrame
     -> CameraCaptureThread
@@ -101,8 +106,6 @@ No output texture is duplicated by `CameraCaptureThread` or `FrameSyncThread`.
 ## Consumer-side GPU lifetime contract
 
 A producer-ready token only says that the camera/producer queue has finished writing the read-only texture. It does not keep the input alive until a downstream consumer queue finishes reading it. Consumers that submit GPU work using a `ReadOnlyFrame` must either hold the frame manually or use `ReadOnlyFrameLifetimeTracker`.
-
-Typical use:
 
 ```cpp
 namespace Pipe = IC4Ext::D3D12;
@@ -123,25 +126,43 @@ For a whole synchronized set:
 lifetimeTracker.retainUntil(frameSet, consumerDone);
 ```
 
+## Automated D3D12 tests
+
+### `test_d3d12_pooled_converter_device`
+
+Requires a usable D3D12 device but no camera. It performs eight real GPU conversions and validates:
+
+- pool acquire/publish/release
+- producer fence completion
+- R8 GPU readback contents
+- four initial input-buffer allocations for the four converter slots
+- four subsequent input-buffer reuses
+- cached input-buffer count and byte total
+
+The test returns 77 when no D3D12 device can be created, so CTest reports it as skipped rather than failed.
+
+### `test_d3d12_dummy_capture_sync_integration`
+
+Requires a usable D3D12 device but no physical camera. Two injected dummy `ReadOnlyFrameSource` instances publish deterministic device timestamps through the real:
+
+```text
+CameraCaptureThread x2
+    -> IndexedReadOnlyFrameQueue
+    -> FrameSyncThread
+    -> ReadOnlyFrameSetQueue
+```
+
+The test validates thread statistics, timestamp matching, synchronized output count, output registration statistics, queue-drop counts, and frame-pool release after consumption.
+
 ## Samples
 
 ### SingleCameraReadOnlyReadbackD3D12
-
-Validates the single-camera producer path by reading immutable frames and saving the last frame through the existing D3D12 readback helper.
 
 ```bat
 SingleCameraReadOnlyReadbackD3D12.exe --device-index 0 --frames 5 --out readonly_frame.ppm
 ```
 
 ### MultiCameraReadOnlySyncD3D12
-
-Runs two `CameraCaptureThread`s into one central `FrameSyncThread`, then emits three output queues:
-
-- `{0, 1}` at `Maximum`
-- `{0}` at fixed FPS
-- `{1}` at fixed FPS
-
-Timestamp-based synchronization is always used.
 
 ```bat
 MultiCameraReadOnlySyncD3D12.exe --device0 0 --device1 1 --duration-sec 10 --timestamp-source host --max-diff-us 4000
@@ -155,7 +176,7 @@ MultiCameraReadOnlySyncD3D12.exe --device0 0 --device1 1 --hardware-trigger --tr
 
 ## Dependency policy
 
-Dependency versions remain unchanged from the v1.x branch while this D3D12 read-only pipeline is introduced:
+Dependency versions remain unchanged from the v1.x branch:
 
 - D3D11Helper `v1.12.1`
 - D3D12Helper `v1.12.1`
@@ -167,10 +188,8 @@ Recording via `D3DVideoEncoder` is not enabled by default because its current `m
 ## Remaining D3D12 work
 
 1. Physically relocate the remaining implementation bodies from `src/V2` / `include/IC4Ext/V2` into normal `src/D3D12` / `include/IC4Ext/D3D12` files instead of wrapper-including them.
-2. Reuse the pooled converter's per-slot default-heap input buffers instead of rebuilding them for each conversion.
-3. Add a real D3D12 device pool/converter test.
-4. Add dummy-camera capture-thread-to-sync-thread integration tests.
-5. Add real two-camera 160 fps stress and runtime-output-update tests.
+2. Add real two-camera 160 fps long-run stress and runtime-output-update tests.
+3. Add explicit device-removal/DRED failure-path tests for the pooled producer path.
 
 ## Resource-state contract
 
