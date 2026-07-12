@@ -1,25 +1,32 @@
-# 02. IC4 device / stream 設計 v1.3
+# 02. IC4 device / stream design
 
-## 1. 目的
+この文書は、IC4 SDKを使ってcamera deviceを選択し、propertyを設定し、QueueSinkからimage bufferを取得するbackend共通設計を定義する。
 
-この文書は IC4 SDK を使って camera device を開き、device property を設定し、QueueSink から image buffer を取得する設計を定義する。
+D3D11とD3D12はIC4 device/stream setupを共有するが、GPU frame公開方式は異なる。
 
-重要な前提:
+```text
+D3D11 -> D3D11CameraFrame
+D3D12 -> IC4Ext::D3D12::ReadOnlyFrame
+```
 
-- `requestedFormat` は device の `PixelFormat` property として設定する。
-- `QueueSink::Config::acceptedPixelFormats` にも同じ format を指定する。
-- IC4 SDK による暗黙の format conversion を避ける。
-- `D3D11CameraCapture` は自前の worker thread を持たないが、IC4 QueueSink callback は使う。
+## 1. Important assumptions
 
-## 2. 使用する IC4 header
+- `requestedFormat`はdeviceの`PixelFormat` propertyとして設定する。
+- `QueueSink::Config::acceptedPixelFormats`にも同じformatを指定する。
+- IC4 SDKによる意図しないformat conversionを避ける。
+- IC4 callback threadではGPU conversionや長時間処理を行わない。
+- callbackはimage bufferとmetadataをpending queueへ移し、`read()`側がGPU conversionする。
+- pending queueと完成GPU frame poolは別のresourceである。
 
-実装では原則として C++ wrapper API を使う。
+## 2. IC4 headers
+
+原則としてC++ wrapperを使う。
 
 ```cpp
 #include <ic4/ic4.h>
 ```
 
-必要に応じて個別 header を include してもよい。
+必要に応じて個別headerを使う。
 
 ```cpp
 #include <ic4/DeviceEnum.h>
@@ -31,9 +38,11 @@
 #include <ic4/PropertyConstants.h>
 ```
 
-## 3. IC4 library lifetime
+## 3. Library lifetime
 
-IC4 SDK の初期化 / 終了が必要な場合、IC4Ext は RAII wrapper を用意する。
+IC4 library初期化/終了はprocess内で整合したlifetimeを持つ。
+
+camera instanceごとに独立initializationを繰り返すのではなく、RAII contextまたはprocess-wide管理を使う。
 
 ```cpp
 class IC4LibraryContext
@@ -47,44 +56,31 @@ public:
 };
 ```
 
-`D3D11CameraCapture` は内部に `std::shared_ptr<IC4LibraryContext>` を持つか、process-wide singleton として管理してよい。
-
 ## 4. Device selection
 
-`IC4DeviceSelector` の解決は次の手順で行う。
+`IC4DeviceSelector`の解決順:
 
-```cpp
-std::optional<ic4::DeviceInfo> resolveDevice(const IC4DeviceSelector& selector);
+```text
+1. serial
+2. uniqueName
+3. deviceIndex
+4. selectorが空ならfirst device
 ```
-
-手順:
-
-1. `ic4::DeviceEnum::enumDevices()` で device list を取得する。
-2. `selector.serial` が非空なら、`DeviceInfo::serial()` と完全一致する device を探す。
-3. `selector.uniqueName` が非空なら、`DeviceInfo::uniqueName()` と完全一致する device を探す。
-4. `selector.deviceIndex >= 0` なら、その index の device を返す。
-5. selector が空なら、list の先頭を返す。
 
 失敗条件:
 
-- device list が空。
-- serial / uniqueName が見つからない。
-- deviceIndex が範囲外。
-- IC4 API が error を返した。
+```text
+device listが空
+serial/uniqueNameが見つからない
+deviceIndexが範囲外
+IC4 API error
+```
 
-`modelName` は selector に含めない。model name は複数台で重複し得るため、初期実装では選択条件にしない。
+model nameは複数台で重複し得るため、主selectorにしない。
 
 ## 5. PixelFormat mapping
 
-`CameraPixelFormat` から `ic4::PixelFormat` への変換関数を実装する。
-
-```cpp
-ic4::PixelFormat toIC4PixelFormat(CameraPixelFormat fmt);
-```
-
-対応表:
-
-```txt
+```text
 Mono8    -> ic4::PixelFormat::Mono8
 BayerRG8 -> ic4::PixelFormat::BayerRG8
 BayerGR8 -> ic4::PixelFormat::BayerGR8
@@ -94,114 +90,205 @@ BGR8     -> ic4::PixelFormat::BGR8
 BGRa8    -> ic4::PixelFormat::BGRa8
 ```
 
-未対応 format はこの関数で error にする。
+未対応formatはopen/configuration errorにする。
 
-## 6. Device property 設定
+## 6. CameraCaptureConfig
 
-`D3D11CameraCapture::open()` は device open 後、stream setup 前に property を設定する。
+代表field:
 
-必須:
-
-```txt
-PixelFormat = requestedFormat
+```text
+ic4StateJson
+streamRequest
+outputSpec
+queuePolicy
+maxPendingBuffers
+shaderConfig
+acquisitionStartMode
+propertyOverrides
 ```
 
-任意指定:
+### Stream request
 
-```txt
-Width  = config.streamRequest.width  if width  > 0
-Height = config.streamRequest.height if height > 0
-FPS    = config.streamRequest.fps    if fps    > 0
+```text
+width
+height
+fps
+requestedFormat
+forceRequestedFormat
+offsetX
+offsetY
 ```
 
-IC4 SDK の property 名は SDK の定数を使う。
+### Output spec
+
+```text
+R8 / RGBA8
+createSrv
+createUav
+```
+
+D3D12 ReadOnly pipelineではconsumerがSRVとして読むため、camera公開frameはSRV-capableである必要がある。
+
+## 7. Configuration order
+
+推奨順:
+
+```text
+1. device open
+2. IC4 JSON state
+3. explicit PixelFormat / Width / Height / FPS / ROI overrides
+4. trigger/property overrides
+5. QueueSink creation
+6. stream setup
+7. negotiated image type validation
+8. backend converter initialization
+```
+
+JSONとexplicit optionの優先順位はAPI/sampleごとに明示する。
+
+## 8. IC4 JSON state
+
+IC Capture 4からexportしたJSONは次を読む。
+
+```text
+devices[deviceIndex].state
+```
 
 ```cpp
-ic4::PropId::PixelFormat
+config.ic4StateJson.path = "camera_state.json";
+config.ic4StateJson.deviceIndex = 0;
+config.ic4StateJson.strict = false;
+config.ic4StateJson.applyNestedSelectorStates = true;
 ```
 
-`Width` / `Height` / `AcquisitionFrameRate` などは IC4 SDK の property wrapper / PropId を確認して使う。device が該当 property を持たない、または設定できない場合は open 失敗にする。
+nested selector propertyはselectorを切り替えながらscalar valueを適用する。array/register blob等、直接適用できない値はskipできる。
 
-`PixelFormat` 設定例の方針:
+JSON内の次は実効capture rateへ影響する。
 
-```cpp
-ic4::PropertyMap props = grabber.devicePropertyMap(err);
-props.setValue(ic4::PropId::PixelFormat, ic4PixelFormat, err);
+```text
+PixelFormat
+Width / Height
+AcquisitionFrameRate
+ExposureTime
+TriggerMode / TriggerSource
 ```
 
-実際の API 名は IC4 SDK header に合わせること。設計上の要件は「QueueSink ではなく device property を設定する」ことである。
+## 9. Device property settings
 
-## 7. QueueSink 設定
+必須または主要property:
 
-`QueueSink::Config` は次のように設定する。
+```text
+PixelFormat
+Width
+Height
+AcquisitionFrameRate
+OffsetX
+OffsetY
+ExposureAuto
+ExposureTime
+GainAuto
+Gain
+Gamma
+TriggerSelector
+TriggerMode
+TriggerSource
+TriggerActivation
+```
+
+deviceがpropertyを持たない、locked、range外の場合は`ErrorInfo`へ記録する。
+
+strict JSON modeでは最初の適用失敗をopen failureにできる。non-strict modeではunsupported/locked propertyをskipできる。
+
+## 10. Trigger configuration
+
+helper:
+
+```text
+ConfigureNoSync
+ConfigureHardwareTriggerSync
+ConfigureSoftwareTriggerSync
+```
+
+hardware trigger例:
+
+```text
+TriggerSelector = FrameStart
+TriggerMode = On
+TriggerSource = Line1
+TriggerActivation = RisingEdge
+ExposureAuto = Off
+```
+
+IC4Extは外部trigger pulseを生成しない。160 fpsでhardware trigger captureするには、Line1へ実際に約160 Hzのpulseが必要である。
+
+## 11. QueueSink configuration
 
 ```cpp
 ic4::QueueSink::Config sinkConfig;
-sinkConfig.acceptedPixelFormats.push_back(toIC4PixelFormat(requestedFormat));
+sinkConfig.acceptedPixelFormats.push_back(
+    ToIC4PixelFormat(requestedFormat));
 ```
 
-`acceptedPixelFormats` を空にしない。空にすると全 format を受け入れてしまい、device format と sink format のずれを検出しにくくなる。
+`acceptedPixelFormats`を空にしない。空だと意図しないIC4側変換を受け入れる可能性がある。
 
-`maxOutputBuffers` は IC4 SDK 内部 queue の上限である。IC4Ext は callback で速やかに `popOutputBuffer()` し、IC4Ext 内部 pending queue へ移すため、初期実装では次の方針にする。
+`maxOutputBuffers`とIC4Ext pending queueは別である。
 
-```txt
-FrameQueuePolicy::LatestOnly     -> sinkConfig.maxOutputBuffers = 2
-FrameQueuePolicy::PreserveFrames -> sinkConfig.maxOutputBuffers = 0 または十分大きい値
-```
+## 12. QueueSink listener
 
-`LatestOnly` で 2 にする理由は、callback 処理中に次 frame が入っても過度に詰まりにくくするためである。IC4Ext 内部 pending queue では最新 1 枚だけを保持する。
-
-## 8. QueueSinkListener 実装
-
-`D3D11CameraCapture` は内部 listener を持つ。
+callback:
 
 ```cpp
 class InternalQueueSinkListener : public ic4::QueueSinkListener
 {
 public:
-    bool sinkConnected(ic4::QueueSink& sink,
-                       const ic4::ImageType& imageType,
-                       size_t minBuffersRequired) override;
+    bool sinkConnected(
+        ic4::QueueSink&,
+        const ic4::ImageType&,
+        size_t minBuffersRequired) override;
 
-    void sinkDisconnected(ic4::QueueSink& sink) override;
-
-    void framesQueued(ic4::QueueSink& sink) override;
+    void sinkDisconnected(ic4::QueueSink&) override;
+    void framesQueued(ic4::QueueSink&) override;
 };
 ```
 
-### 8.1 sinkConnected
+### sinkConnected
 
-`sinkConnected()` では negotiated image type を検証する。
+検証:
 
-検証内容:
+```text
+negotiated pixel format
+width / height
+row pitch / image size
+minimum buffers
+```
 
-1. `imageType.pixel_format()` が `requestedFormat` と一致すること。
-2. width / height が config と矛盾しないこと。
-3. row pitch や image size を取得できる場合は metadata に保存すること。
+### framesQueued
 
-`imageType.pixel_format()` が `requestedFormat` と一致しない場合、原則 `false` を返して stream setup を失敗させる。
+実行内容:
 
-### 8.2 framesQueued
-
-`framesQueued()` は IC4 SDK の dedicated thread から呼ばれる。ここで重い GPU 処理をしてはならない。
-
-行う処理:
-
-1. `sink.isCancelRequested()` を適宜確認する。
-2. `sink.popOutputBuffer()` を呼び、取得できる image buffer を取り出す。
-3. buffer と受信時刻を `PendingIC4Frame` に包む。
-4. `D3D11CameraCapture` 内部の mutex 付き pending queue へ push する。
-5. condition variable で `read()` を起こす。
+```text
+popOutputBuffer
+hostReceivedTime取得
+FrameTiming/format/chunk metadata取得
+PendingIC4Frameを作成
+mutex付きpending queueへpush
+condition variable notify
+```
 
 禁止事項:
 
-- callback 内で D3D11 upload / compute shader dispatch を行わない。
-- callback 内で長時間 block しない。
-- callback 内で `streamStop()` を待つような処理を行わない。
+```text
+GPU upload/compute
+readback
+OpenCV
+file write
+long wait
+streamStop/close
+```
 
-### 8.3 pending queue
+## 13. PendingIC4Frame
 
-内部 pending frame は次のように表す。
+概念型:
 
 ```cpp
 struct PendingIC4Frame
@@ -209,46 +296,53 @@ struct PendingIC4Frame
     std::shared_ptr<ic4::ImageBuffer> buffer;
     FrameTiming timing;
     FrameFormatMetadata format;
+    FrameChunkMetadata chunkMetadata;
 };
 ```
 
-`std::shared_ptr<ic4::ImageBuffer>` を保持している間、IC4 buffer は sink の free queue に戻らない。したがって pending queue のサイズは必ず管理する。
+`ImageBuffer`を保持している間、IC4側bufferはfree queueへ戻らない。pending数は必ず制限する。
 
-`LatestOnly` の場合:
+## 14. Queue policies
 
-```txt
-新 frame 到着時:
-  古い pending frame をすべて破棄
-  新 frame だけ保持
+### LatestOnly
+
+```text
+new frame arrival
+  -> old pending framesを破棄
+  -> latest frameのみ保持
 ```
 
-`PreserveFrames` の場合:
+preview/低遅延直接read向け。
 
-```txt
-新 frame 到着時:
-  pending queue の末尾へ追加
-  maxPendingBuffers を超えた場合は古い frame を drop し、drop count を増やす
+### PreserveFrames
+
+```text
+new frame arrival
+  -> FIFO末尾へ追加
+  -> maxPendingBuffers超過時に古いframeをdrop
 ```
 
-## 9. read() から見る pending queue
+`CameraCaptureThread`の`ReadMode::NextFrame`向け。
 
-`read(ReadMode::LatestFrame)`:
+## 15. read()
 
-```txt
-pending queue が空なら timeout まで待つ
-複数ある場合は最後の frame だけ取り出す
-それ以前の frame は破棄する
+### LatestFrame
+
+```text
+pending queueが空ならtimeoutまで待つ
+latest 1 frameを取得
+古いpending frameを破棄
+GPU conversion
 ```
 
-`read(ReadMode::NextFrame)`:
+### NextFrame
 
-```txt
-pending queue が空なら timeout まで待つ
-最古 frame を 1 枚取り出す
-他の frame は残す
+```text
+pending queueが空ならtimeoutまで待つ
+oldest 1 frameを取得
+残りを維持
+GPU conversion
 ```
-
-`read()` の timeout は `CameraReadOptions` または config で指定できるようにする。
 
 ```cpp
 struct CameraReadOptions
@@ -258,70 +352,123 @@ struct CameraReadOptions
 };
 ```
 
-簡易 API として次も提供してよい。
+## 16. D3D12 conversion and pool interaction
 
-```cpp
-ReadResult read(ReadMode mode = ReadMode::LatestFrame);
-ReadResult read(const CameraReadOptions& options);
+D3D12 `CameraCapture::read()`はpending IC4 bufferを取り出した後、次を行う。
+
+```text
+FramePool shape確認 / lazy initialization
+FrameWriter acquire
+PooledFrameConverter convert
+producer queue signal
+ReadOnlyFrame publish
 ```
 
-## 10. stream setup / start / stop
+FramePool acquireに失敗した場合、camera hardwareが停止していなくてもconsumerへframeを公開できない。`FramePoolStats::exhaustionDrops`とcapture timeoutを確認する。
 
-`open()` の順序:
+10-output予備試験では、pool 16/64で枯渇し、128/256で解消した。
 
-```txt
-1. IC4 library initialize
-2. DeviceEnum::enumDevices
-3. selector resolve
-4. Grabber create
-5. deviceOpen(DeviceInfo)
-6. device property 設定: PixelFormat, Width, Height, FPS
-7. QueueSink listener create
-8. QueueSink::create(listener, sinkConfig)
-9. grabber.streamSetup(queueSink, AcquisitionStart)
-10. negotiated format 検証
-11. D3D11 converter 初期化
+## 17. Stream lifecycle
+
+基本順:
+
+```text
+open
+streamSetup
+acquisition start
+read loop
+acquisition stop
+stream stop
+close
 ```
 
-`close()` の順序:
+multi-camera hardware trigger setupでは、cameraごとのopen/start timingと外部trigger開始時点をapplication側で管理する。
 
-```txt
-1. acquisitionStop 可能なら実行
-2. streamStop 可能なら実行
-3. pending queue を clear
-4. QueueSink / listener / Grabber を release
-5. D3D11 resources を release
+`AcquisitionStartMode::Deferred`はcamera/driver組合せによって動作差があるため、実機検証済みsequenceを優先する。
+
+## 18. Runtime setters
+
+open後に利用可能な代表API:
+
+```text
+setFrameRate
+setExposureAuto
+setExposureTime
+setGainAuto
+setGain
+setGamma
+setOffset
+setRoi
+setPixelFormat
+setIC4Property
+softwareTrigger
 ```
 
-`streamStop()` は `framesQueued()` callback の終了を待つ可能性があるため、callback 内から `close()` を呼んではならない。
+stream中にlockedされるpropertyはsetterがfalseを返す。必要ならacquisitionを停止してから変更する。
 
-## 11. frame metadata の取得
-
-IC4 image buffer から取得できる情報は可能な限り `FrameTiming` / `FrameFormatMetadata` に入れる。
+## 19. Metadata
 
 最低限:
 
-- host received time
-- width
-- height
-- actual input format
-- input row pitch bytes
-
-frame number / device timestamp が IC4 API から取得できる場合は入れる。取得できない場合は 0 とする。
-
-## 12. 統計情報
-
-`D3D11CameraCapture` は最低限次の stats を持つ。
-
-```cpp
-struct CameraCaptureStats
-{
-    std::uint64_t receivedBuffers = 0;
-    std::uint64_t droppedPendingBuffers = 0;
-    std::uint64_t readFrames = 0;
-    std::uint64_t readTimeouts = 0;
-    std::uint64_t conversionFailures = 0;
-};
+```text
+host received time
+width / height
+actual input format
+input row pitch
 ```
 
-stats は thread-safe に取得できること。
+利用可能なら:
+
+```text
+device frame number
+device timestamp
+chunk block id
+exposure
+gain
+camera-specific chunk fields
+```
+
+D3D12 frame synchronizationはframe numberを使わずtimestamp-nearestを使う。
+
+## 20. Statistics
+
+```text
+receivedBuffers
+droppedPendingBuffers
+readFrames
+readTimeouts
+conversionFailures
+```
+
+D3D12では加えてFramePool statisticsを確認する。
+
+```text
+capacity
+available
+writing
+published
+exhaustionDrops
+waitTimeouts
+```
+
+実効camera rateを判断するときは、`CameraPerformanceSnapshot`のIC4 stream statisticsとtimingも併用する。
+
+## 21. Thread safety
+
+```text
+IC4 callback thread -> pending queue push
+capture/read thread  -> pending queue pop + GPU conversion
+control thread       -> property/lifecycle operations
+```
+
+`read()`の複数consumer同時呼び出しは想定しない。1つの`CameraCapture`に対して1つのread ownerを持つ。
+
+callbackとclose/stream stopの競合に注意する。callback内からcloseしない。
+
+## 22. Related documents
+
+```text
+docs/d3d12/READONLY_PIPELINE.md
+docs/d3d12/VALIDATION_AND_TUNING.md
+docs/design/10_D3D12Backend.md
+```
