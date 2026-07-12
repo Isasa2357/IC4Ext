@@ -30,11 +30,78 @@ option(IC4EXT_FETCH_D3D12HELPER "Fetch D3D12Helper from GitHub when D3D12HELPER_
 option(IC4EXT_FETCH_THREADKIT "Fetch ThreadKit from GitHub when THREADKIT_ROOT is empty" ON)
 option(IC4EXT_FETCH_NLOHMANN_JSON "Fetch nlohmann/json from GitHub instead of find_package" ON)
 
-set(IC4_SDK_ROOT "" CACHE PATH "Path to IC Imaging Control 4 SDK root. If empty, IC4Ext uses IC4PATH.")
+set(IC4_SDK_ROOT "" CACHE PATH "Path to IC Imaging Control 4 SDK root. If empty, IC4Ext uses IC4PATH or common installer locations.")
 if(NOT IC4_SDK_ROOT AND DEFINED ENV{IC4PATH} AND NOT "$ENV{IC4PATH}" STREQUAL "")
     file(TO_CMAKE_PATH "$ENV{IC4PATH}" IC4EXT_IC4PATH_ROOT)
     set(IC4_SDK_ROOT "${IC4EXT_IC4PATH_ROOT}" CACHE PATH "Path to IC Imaging Control 4 SDK root" FORCE)
     message(STATUS "IC4Ext: using IC4_SDK_ROOT from IC4PATH=${IC4_SDK_ROOT}")
+endif()
+
+set(IC4EXT_IC4_INCLUDE_DIR "" CACHE PATH "Directory containing ic4/ic4.h. Usually <IC Imaging Control 4>/include.")
+set(IC4EXT_IC4_LIBRARY_DIR "" CACHE PATH "Directory containing ic4core.lib. Usually <IC Imaging Control 4>/lib/x64.")
+
+set(IC4EXT_IC4_ROOT_CANDIDATES)
+if(IC4_SDK_ROOT)
+    list(APPEND IC4EXT_IC4_ROOT_CANDIDATES "${IC4_SDK_ROOT}")
+endif()
+if(DEFINED ENV{IC4PATH} AND NOT "$ENV{IC4PATH}" STREQUAL "")
+    file(TO_CMAKE_PATH "$ENV{IC4PATH}" IC4EXT_ENV_IC4PATH_ROOT)
+    list(APPEND IC4EXT_IC4_ROOT_CANDIDATES "${IC4EXT_ENV_IC4PATH_ROOT}")
+endif()
+if(DEFINED ENV{LOCALAPPDATA})
+    file(TO_CMAKE_PATH "$ENV{LOCALAPPDATA}" IC4EXT_LOCALAPPDATA)
+    list(APPEND IC4EXT_IC4_ROOT_CANDIDATES
+        "${IC4EXT_LOCALAPPDATA}/Programs/The Imaging Source Europe GmbH/IC Imaging Control 4")
+endif()
+if(DEFINED ENV{ProgramFiles})
+    file(TO_CMAKE_PATH "$ENV{ProgramFiles}" IC4EXT_PROGRAMFILES)
+    list(APPEND IC4EXT_IC4_ROOT_CANDIDATES
+        "${IC4EXT_PROGRAMFILES}/The Imaging Source Europe GmbH/IC Imaging Control 4")
+endif()
+
+if(IC4EXT_IC4_ROOT_CANDIDATES)
+    list(REMOVE_DUPLICATES IC4EXT_IC4_ROOT_CANDIDATES)
+endif()
+
+if(NOT IC4EXT_IC4_INCLUDE_DIR)
+    foreach(IC4EXT_CANDIDATE_ROOT IN LISTS IC4EXT_IC4_ROOT_CANDIDATES)
+        if(EXISTS "${IC4EXT_CANDIDATE_ROOT}/include/ic4/ic4.h")
+            set(IC4EXT_IC4_INCLUDE_DIR "${IC4EXT_CANDIDATE_ROOT}/include" CACHE PATH "Directory containing ic4/ic4.h" FORCE)
+            if(NOT IC4_SDK_ROOT)
+                set(IC4_SDK_ROOT "${IC4EXT_CANDIDATE_ROOT}" CACHE PATH "Path to IC Imaging Control 4 SDK root" FORCE)
+            endif()
+            break()
+        endif()
+    endforeach()
+endif()
+
+if(NOT IC4EXT_IC4_LIBRARY_DIR)
+    foreach(IC4EXT_CANDIDATE_ROOT IN LISTS IC4EXT_IC4_ROOT_CANDIDATES)
+        if(EXISTS "${IC4EXT_CANDIDATE_ROOT}/lib/x64/ic4core.lib")
+            set(IC4EXT_IC4_LIBRARY_DIR "${IC4EXT_CANDIDATE_ROOT}/lib/x64" CACHE PATH "Directory containing ic4core.lib" FORCE)
+            break()
+        endif()
+    endforeach()
+endif()
+
+if(WIN32)
+    if(NOT IC4EXT_IC4_INCLUDE_DIR OR NOT EXISTS "${IC4EXT_IC4_INCLUDE_DIR}/ic4/ic4.h")
+        message(FATAL_ERROR
+            "IC4 SDK header was not found: ic4/ic4.h. "
+            "Set IC4_SDK_ROOT to the IC Imaging Control 4 install root, or set "
+            "IC4EXT_IC4_INCLUDE_DIR directly to the include directory. "
+            "Example: -DIC4_SDK_ROOT=\"C:/Users/<user>/AppData/Local/Programs/The Imaging Source Europe GmbH/IC Imaging Control 4\"")
+    endif()
+    if(NOT IC4EXT_IC4_LIBRARY_DIR OR NOT EXISTS "${IC4EXT_IC4_LIBRARY_DIR}/ic4core.lib")
+        message(FATAL_ERROR
+            "IC4 SDK library was not found: ic4core.lib. "
+            "Set IC4_SDK_ROOT to the IC Imaging Control 4 install root, or set "
+            "IC4EXT_IC4_LIBRARY_DIR directly to the lib/x64 directory.")
+    endif()
+    message(STATUS "IC4Ext: using IC4 include dir: ${IC4EXT_IC4_INCLUDE_DIR}")
+    message(STATUS "IC4Ext: using IC4 library dir: ${IC4EXT_IC4_LIBRARY_DIR}")
+else()
+    message(WARNING "IC4Ext targets Windows/IC4. Non-Windows configure is for source inspection only.")
 endif()
 
 set(D3D11HELPER_ROOT "" CACHE PATH "Optional local path to D3D11Helper")
@@ -208,11 +275,9 @@ if(NOT WIN32)
     message(WARNING "IC4Ext targets Windows/D3D backends. Non-Windows configure is for source inspection only.")
 endif()
 
-if(IC4_SDK_ROOT)
-    target_include_directories(IC4Ext PUBLIC "${IC4_SDK_ROOT}/include")
-    target_link_directories(IC4Ext PUBLIC "${IC4_SDK_ROOT}/lib/x64")
-else()
-    message(WARNING "IC4_SDK_ROOT is empty. Configure it or set IC4PATH to build against IC4 SDK.")
+target_include_directories(IC4Ext PUBLIC "${IC4EXT_IC4_INCLUDE_DIR}")
+if(WIN32)
+    target_link_directories(IC4Ext PUBLIC "${IC4EXT_IC4_LIBRARY_DIR}")
 endif()
 
 if(IC4EXT_ENABLE_D3D11)
