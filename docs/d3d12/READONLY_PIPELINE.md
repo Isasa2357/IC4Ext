@@ -54,6 +54,7 @@ D3D12Pipe::FrameWriter writer;
   - immutable selected-camera frame set
 - `IC4Ext::D3D12::FrameSyncThread`
   - one complete synchronized set across all registered cameras
+  - timestamp-nearest matching only
   - runtime output registration/update/replacement/removal
   - required-camera selection per output
   - `Maximum` or fixed FPS rate gate
@@ -64,6 +65,25 @@ D3D12Pipe::FrameWriter writer;
   - searches existing `packages/` and the user NuGet cache
   - restores `Microsoft.Direct3D.DXC` from NuGet when missing
   - copies both `dxcompiler.dll` and `dxil.dll` next to IC4Ext sample/test executables
+
+## Timestamp-only synchronization
+
+D3D12 read-only synchronization intentionally does not support frame-number matching. Independent cameras can expose different device frame-number counter domains even when they are hardware-triggered together, so matching absolute or relative frame numbers is fragile.
+
+`FrameSyncThread` always uses timestamp-nearest matching:
+
+```text
+sync timestamp = device timestamp when available, otherwise host-received timestamp
+```
+
+This can be configured with:
+
+```text
+FrameSyncConfig::timestampSource      Auto | HostReceived | Device
+FrameSyncConfig::maxTimestampDiffNs   allowed timestamp difference
+```
+
+For hardware-triggered cameras, prefer `timestampSource=host` first to validate host arrival skew, then test `device` if the camera exposes reliable device timestamps.
 
 ## End-to-end D3D12 path
 
@@ -116,14 +136,16 @@ Runs two `CameraCaptureThread`s into one central `FrameSyncThread`, then emits t
 - `{0}` at fixed FPS
 - `{1}` at fixed FPS
 
+Timestamp-based synchronization is always used.
+
 ```bat
-MultiCameraReadOnlySyncD3D12.exe --device0 0 --device1 1 --duration-sec 10 --sync-policy timestamp
+MultiCameraReadOnlySyncD3D12.exe --device0 0 --device1 1 --duration-sec 10 --timestamp-source host --max-diff-us 4000
 ```
 
 For hardware-triggered cameras:
 
 ```bat
-MultiCameraReadOnlySyncD3D12.exe --device0 0 --device1 1 --hardware-trigger --trigger-source Line1 --sync-policy frame-number
+MultiCameraReadOnlySyncD3D12.exe --device0 0 --device1 1 --hardware-trigger --trigger-source Line1 --timestamp-source host --max-diff-us 4000
 ```
 
 Important arguments:
@@ -132,7 +154,6 @@ Important arguments:
 --device0 N --device1 N
 --duration-sec N
 --report-ms N
---sync-policy frame-number|timestamp
 --timestamp-source auto|host|device
 --max-diff-us N
 --single-output-fps F
