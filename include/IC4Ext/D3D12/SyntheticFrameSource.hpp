@@ -10,7 +10,9 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
+#include <stdexcept>
 
 namespace IC4Ext::D3D12 {
 
@@ -53,8 +55,13 @@ struct SyntheticFrameSourceConfig
     bool isValid() const noexcept
     {
         const double period = 1'000'000'000.0 / fps;
-        return width > 0 && height > 0 && std::isfinite(fps) && fps > 0.0 &&
-               std::isfinite(period) && period >= 1.0 && firstFrameNumber != 0 &&
+        const double maximumPeriod =
+            static_cast<double>(std::numeric_limits<std::uint64_t>::max() - 1ull);
+        return width > 0 && height > 0 &&
+               width <= static_cast<std::uint32_t>(std::numeric_limits<int>::max()) &&
+               height <= static_cast<std::uint32_t>(std::numeric_limits<int>::max()) &&
+               std::isfinite(fps) && fps > 0.0 && std::isfinite(period) &&
+               period >= 1.0 && period <= maximumPeriod && firstFrameNumber != 0 &&
                deviceTimestampOriginNs != 0 && initialFramePoolCapacity > 0 &&
                maxFramePoolCapacity >= initialFramePoolCapacity &&
                framePoolWaitTimeout.count() >= 0 && gpuWaitTimeoutMs > 0 &&
@@ -66,7 +73,11 @@ struct SyntheticFrameSourceConfig
     {
         if (!std::isfinite(fps) || fps <= 0.0) return 0;
         const double period = 1'000'000'000.0 / fps;
-        if (!std::isfinite(period) || period < 1.0) return 0;
+        const double maximumPeriod =
+            static_cast<double>(std::numeric_limits<std::uint64_t>::max() - 1ull);
+        if (!std::isfinite(period) || period < 1.0 || period > maximumPeriod) {
+            return 0;
+        }
         return static_cast<std::uint64_t>(period + 0.5);
     }
 };
