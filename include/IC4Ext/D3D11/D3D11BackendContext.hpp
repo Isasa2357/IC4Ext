@@ -1,25 +1,28 @@
 #pragma once
 
+#include "IC4Ext/D3D11/D3D11ContextSynchronization.hpp"
+
 #include <D3D11Helper/D3D11Core/D3D11Core.hpp>
 
 #include <d3d11.h>
 #include <wrl/client.h>
 
 #include <memory>
+#include <mutex>
 #include <utility>
 
 namespace IC4Ext {
 
 // Shared/non-owning D3D11 device context bundle used by the D3D11 ReadOnly
-// pipeline. resolve() also enables ID3D11Multithread protection by default so
-// independent camera/source worker threads may safely submit to the immediate
-// context.
+// pipeline. resolve() enables ID3D11Multithread protection and resolves a shared
+// sequence mutex for multi-call immediate-context transactions.
 struct D3D11BackendContext
 {
     std::shared_ptr<D3D11CoreLib::D3D11Core> core;
     D3D11CoreLib::D3D11Core* corePtr = nullptr;
     ID3D11Device* device = nullptr;
     ID3D11DeviceContext* immediateContext = nullptr;
+    std::shared_ptr<std::recursive_mutex> immediateContextMutex;
     bool enableMultithreadProtection = true;
 
     static D3D11BackendContext FromCore(
@@ -52,8 +55,12 @@ struct D3D11BackendContext
         if (!immediateContext && corePtr) {
             immediateContext = corePtr->GetImmediateContext();
         }
-
         if (!device || !immediateContext) return false;
+
+        if (!immediateContextMutex) {
+            immediateContextMutex =
+                D3D11::Detail::AcquireImmediateContextMutex(immediateContext);
+        }
 
         if (enableMultithreadProtection) {
             Microsoft::WRL::ComPtr<ID3D11Multithread> multithread;
@@ -62,7 +69,7 @@ struct D3D11BackendContext
                 multithread->SetMultithreadProtected(TRUE);
             }
         }
-        return true;
+        return immediateContextMutex != nullptr;
     }
 };
 
