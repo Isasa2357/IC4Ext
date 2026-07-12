@@ -13,7 +13,6 @@ inline constexpr FrameSyncOutputId InvalidFrameSyncOutputId =
 
 using FrameRateMode = ::IC4Ext::V2::FrameRateMode;
 using FrameRateLimit = ::IC4Ext::V2::FrameRateLimit;
-using FrameSyncPolicy = ::IC4Ext::V2::FrameSyncPolicy;
 using FrameSyncTimestampSource = ::IC4Ext::V2::FrameSyncTimestampSource;
 using FrameSyncConfig = ::IC4Ext::V2::FrameSyncConfig;
 using FrameSyncStats = ::IC4Ext::V2::FrameSyncStats;
