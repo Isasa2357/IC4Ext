@@ -1,6 +1,6 @@
 option(IC4EXT_MULTICAMERA_SAMPLE_ENABLE_RECORDING
-    "Enable H.264 recording in MultiCameraSyncDisplayD3D12"
-    ON)
+    "Enable H.264 recording in MultiCameraSyncDisplayD3D12. OFF by default because D3DVideoEncoder main may require a newer D3D12Helper than IC4Ext v1.x pins."
+    OFF)
 
 option(IC4EXT_BUILD_OPENCV_ANALYSIS_SAMPLE
     "Build the OpenCV synchronized multi-camera analysis/display/recording sample"
