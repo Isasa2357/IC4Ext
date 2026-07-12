@@ -68,19 +68,36 @@ D3D12_RESOURCE_BARRIER UavBarrier(ID3D12Resource* resource) noexcept
     return barrier;
 }
 
+struct CachedInputBuffer
+{
+    D3D12CoreLib::D3D12Resource resource;
+    std::uint64_t capacityBytes = 0;
+    D3D12_RESOURCE_STATES state = D3D12_RESOURCE_STATE_COPY_DEST;
+};
+
 } // namespace
 
 class D3D12PooledFrameConverter::Impl
 {
 public:
     IC4Ext::D3D12FrameConverter* converter = nullptr;
-    std::unordered_map<const void*, D3D12CoreLib::D3D12Resource> inputBuffers;
+    std::unordered_map<const void*, CachedInputBuffer> inputBuffers;
+    D3D12PooledFrameConverterStats statsValue;
     mutable std::mutex mutex;
     ErrorInfo lastError;
 
     void setError(ErrorCode code, const char* where, const std::string& message)
     {
         lastError = MakeError(code, where, message);
+    }
+
+    void refreshCacheStats() noexcept
+    {
+        statsValue.cachedInputBufferCount = inputBuffers.size();
+        statsValue.cachedInputBufferBytes = 0;
+        for (const auto& item : inputBuffers) {
+            statsValue.cachedInputBufferBytes += item.second.capacityBytes;
+        }
     }
 };
 
@@ -105,6 +122,7 @@ bool D3D12PooledFrameConverter::initialize(IC4Ext::D3D12FrameConverter& converte
     }
     impl_->converter = &converter;
     impl_->inputBuffers.clear();
+    impl_->statsValue = {};
     impl_->lastError = NoError();
     return true;
 }
@@ -180,30 +198,46 @@ bool D3D12PooledFrameConverter::convert(
     }
 
     try {
-        auto& inputBuffer = impl_->inputBuffers[slot];
-        inputBuffer = D3D12CoreLib::CreateBuffer(
-            *converter->core_,
-            uploadSize,
-            D3D12_HEAP_TYPE_DEFAULT,
-            D3D12_RESOURCE_STATE_COPY_DEST);
+        auto& cachedInput = impl_->inputBuffers[slot];
+        if (!cachedInput.resource.Get() || cachedInput.capacityBytes < uploadSize) {
+            cachedInput.resource = D3D12CoreLib::CreateBuffer(
+                *converter->core_,
+                uploadSize,
+                D3D12_HEAP_TYPE_DEFAULT,
+                D3D12_RESOURCE_STATE_COPY_DEST);
+            cachedInput.capacityBytes = uploadSize;
+            cachedInput.state = D3D12_RESOURCE_STATE_COPY_DEST;
+            ++impl_->statsValue.inputBufferAllocations;
+            impl_->refreshCacheStats();
+        } else {
+            ++impl_->statsValue.inputBufferReuses;
+        }
 
         auto upload = slot->uploadRing.Allocate(uploadSize, 4);
         std::memset(upload.cpuPtr, 0, static_cast<std::size_t>(uploadSize));
         std::memcpy(upload.cpuPtr, input.data, static_cast<std::size_t>(neededBytes));
 
         auto* commandList = slot->commandContext.GetCommandList();
+        if (cachedInput.state != D3D12_RESOURCE_STATE_COPY_DEST) {
+            auto inputToCopy = TransitionBarrier(
+                cachedInput.resource.Get(),
+                cachedInput.state,
+                D3D12_RESOURCE_STATE_COPY_DEST);
+            slot->commandContext.ResourceBarrier(inputToCopy);
+        }
+
         commandList->CopyBufferRegion(
-            inputBuffer.Get(),
+            cachedInput.resource.Get(),
             0,
             upload.resource,
             upload.offset,
             uploadSize);
 
-        auto inputBarrier = TransitionBarrier(
-            inputBuffer.Get(),
+        auto inputToRead = TransitionBarrier(
+            cachedInput.resource.Get(),
             D3D12_RESOURCE_STATE_COPY_DEST,
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        slot->commandContext.ResourceBarrier(inputBarrier);
+        slot->commandContext.ResourceBarrier(inputToRead);
 
         const D3D12_RESOURCE_STATES initialState = writer.initialState();
         const D3D12_RESOURCE_STATES writeState = writer.writeState();
@@ -224,7 +258,7 @@ bool D3D12PooledFrameConverter::convert(
         inputSrvDesc.Buffer.NumElements = static_cast<UINT>(uploadSize / 4u);
         inputSrvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
         converter->device_->CreateShaderResourceView(
-            inputBuffer.Get(),
+            cachedInput.resource.Get(),
             &inputSrvDesc,
             inputSrv.cpu);
 
@@ -275,6 +309,8 @@ bool D3D12PooledFrameConverter::convert(
         slot->commandContext.Close();
         ID3D12CommandList* lists[] = {slot->commandContext.GetCommandList()};
         converter->queue_->ExecuteCommandLists(1, lists);
+        cachedInput.state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+
         const std::uint64_t fenceValue = converter->queue_->Signal();
         slot->uploadRing.FinishFrame(fenceValue);
         slot->inFlight = converter->fenceManager_->makeToken(fenceValue);
@@ -298,12 +334,19 @@ bool D3D12PooledFrameConverter::convert(
             return false;
         }
 
+        ++impl_->statsValue.conversions;
         impl_->lastError = NoError();
         return true;
     } catch (const std::exception& e) {
         impl_->setError(ErrorCode::D3D12Error, "D3D12PooledFrameConverter::convert", e.what());
         return false;
     }
+}
+
+D3D12PooledFrameConverterStats D3D12PooledFrameConverter::stats() const
+{
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    return impl_->statsValue;
 }
 
 ErrorInfo D3D12PooledFrameConverter::lastError() const
