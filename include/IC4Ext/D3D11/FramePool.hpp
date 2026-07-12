@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 
 namespace IC4Ext::D3D11 {
 
@@ -105,12 +106,17 @@ private:
     D3D11FrameWriter(
         std::shared_ptr<D3D11FramePoolState> state,
         std::size_t entryIndex,
-        std::uint64_t leaseGeneration) noexcept;
+        std::uint64_t leaseGeneration);
 
     std::shared_ptr<D3D11FramePoolState> state_;
     std::size_t entryIndex_ = static_cast<std::size_t>(-1);
     std::uint64_t leaseGeneration_ = 0;
     bool published_ = false;
+
+    // One writer owns one complete immediate-context producer transaction from
+    // acquire() through publish()/cancel(). This prevents two camera/source
+    // workers from interleaving bind/update/dispatch/signal calls.
+    std::unique_lock<std::recursive_mutex> contextLock_;
 
     friend class D3D11FramePool;
 };
