@@ -70,7 +70,9 @@ public:
         config.height = description.Height;
         config.format = description.Format;
         config.createSrv = true;
-        config.createUav = true;
+        // This transitional camera path performs CopyResource into the final
+        // immutable texture, so the producer does not require a UAV.
+        config.createUav = false;
         config.initialCapacity = options.initialFramePoolCapacity;
         config.maxCapacity = options.maxFramePoolCapacity;
         config.exhaustionPolicy = options.framePoolExhaustionPolicy;
@@ -227,6 +229,13 @@ D3D11ReadOnlyReadResult D3D11ReadOnlyCameraCapture::read(
 
     std::lock_guard<std::mutex> lock(impl_->mutex);
     impl_->collectCompletedCopies();
+
+    // The legacy producer conversion and the final ReadOnly CopyResource must be
+    // one uninterrupted immediate-context transaction when multiple cameras
+    // share one D3D11 device/context.
+    Detail::ImmediateContextSequenceLock contextSequence(
+        impl_->backend.immediateContextMutex);
+
     auto sourceResult = impl_->capture->read(options);
     if (!sourceResult) {
         result.error = sourceResult.error;
