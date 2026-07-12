@@ -156,11 +156,15 @@ struct D3D11FramePoolState
 D3D11FrameWriter::D3D11FrameWriter(
     std::shared_ptr<D3D11FramePoolState> state,
     std::size_t entryIndex,
-    std::uint64_t leaseGeneration) noexcept
+    std::uint64_t leaseGeneration)
     : state_(std::move(state)),
       entryIndex_(entryIndex),
       leaseGeneration_(leaseGeneration)
 {
+    if (state_ && state_->backend.immediateContextMutex) {
+        contextLock_ = std::unique_lock<std::recursive_mutex>(
+            *state_->backend.immediateContextMutex);
+    }
 }
 
 D3D11FrameWriter::~D3D11FrameWriter()
@@ -172,7 +176,8 @@ D3D11FrameWriter::D3D11FrameWriter(D3D11FrameWriter&& other) noexcept
     : state_(std::move(other.state_)),
       entryIndex_(other.entryIndex_),
       leaseGeneration_(other.leaseGeneration_),
-      published_(other.published_)
+      published_(other.published_),
+      contextLock_(std::move(other.contextLock_))
 {
     other.entryIndex_ = InvalidEntryIndex;
     other.leaseGeneration_ = 0;
@@ -187,6 +192,7 @@ D3D11FrameWriter& D3D11FrameWriter::operator=(D3D11FrameWriter&& other) noexcept
     entryIndex_ = other.entryIndex_;
     leaseGeneration_ = other.leaseGeneration_;
     published_ = other.published_;
+    contextLock_ = std::move(other.contextLock_);
     other.entryIndex_ = InvalidEntryIndex;
     other.leaseGeneration_ = 0;
     other.published_ = true;
@@ -272,6 +278,7 @@ D3D11ReadOnlyFrame D3D11FrameWriter::publish(
     entryIndex_ = InvalidEntryIndex;
     leaseGeneration_ = 0;
     state_.reset();
+    if (contextLock_.owns_lock()) contextLock_.unlock();
     return D3D11ReadOnlyFrame(std::move(storage));
 }
 
@@ -282,6 +289,7 @@ void D3D11FrameWriter::cancel() noexcept
     entryIndex_ = InvalidEntryIndex;
     leaseGeneration_ = 0;
     published_ = true;
+    if (contextLock_.owns_lock()) contextLock_.unlock();
 }
 
 D3D11FramePool::~D3D11FramePool()
@@ -384,7 +392,22 @@ D3D11FrameWriter D3D11FramePool::acquire()
     ++entry.generation;
     ++state_->acquisitions;
     state_->lastError = NoError();
-    return D3D11FrameWriter(state_, index, entry.generation);
+
+    const auto generation = entry.generation;
+    const auto state = state_;
+    lock.unlock();
+
+    try {
+        return D3D11FrameWriter(state, index, generation);
+    } catch (const std::exception& exception) {
+        state->releaseWriting(index, generation);
+        std::lock_guard<std::mutex> stateLock(state->mutex);
+        state->setError(
+            ErrorCode::ThreadError,
+            "D3D11FramePool::acquire/contextLock",
+            exception.what());
+        return {};
+    }
 }
 
 D3D11FramePoolStats D3D11FramePool::stats() const
