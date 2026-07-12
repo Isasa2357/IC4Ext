@@ -33,7 +33,7 @@ int main()
     assert(emptyPoolStats.inFlight() == 0);
     assert(emptyPoolStats.availableRatio() == 0.0);
     assert(emptyPoolStats.inFlightRatio() == 0.0);
-    assert(emptyPoolStats.exhausted());
+    assert(!emptyPoolStats.exhausted());
 
     emptyPoolStats.capacity = 8;
     emptyPoolStats.maxCapacity = 16;
@@ -44,6 +44,10 @@ int main()
     assert(emptyPoolStats.availableRatio() == 3.0 / 8.0);
     assert(emptyPoolStats.inFlightRatio() == 3.0 / 8.0);
     assert(!emptyPoolStats.exhausted());
+
+    emptyPoolStats.available = 0;
+    emptyPoolStats.capacity = 16;
+    assert(emptyPoolStats.exhausted());
 
     assert(FrameRateLimit::Maximum().isValid());
     assert(FrameRateLimit::Fixed(60.0).isValid());
