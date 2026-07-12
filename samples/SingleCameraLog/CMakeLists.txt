@@ -12,3 +12,12 @@ if(WIN32 AND IC4_SDK_ROOT)
             "$<TARGET_FILE_DIR:SingleCameraLog>/shaders"
         VERBATIM)
 endif()
+
+# D3D11 2.0.0 ReadOnly samples live as sibling directories. They are registered
+# here so the top-level sample selection remains backward compatible.
+add_subdirectory(
+    "${CMAKE_CURRENT_SOURCE_DIR}/../SingleCameraReadOnlyReadbackD3D11"
+    "${CMAKE_CURRENT_BINARY_DIR}/../SingleCameraReadOnlyReadbackD3D11")
+add_subdirectory(
+    "${CMAKE_CURRENT_SOURCE_DIR}/../MultiCameraReadOnlySyncD3D11"
+    "${CMAKE_CURRENT_BINARY_DIR}/../MultiCameraReadOnlySyncD3D11")
