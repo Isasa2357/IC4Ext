@@ -12,6 +12,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
@@ -81,6 +82,12 @@ struct Options
         Pipe::FrameSyncTimestampSource::HostReceived;
     std::uint64_t maxDiffUs = 4000;
 
+    // A stress run that emits only one synchronized set must not be reported as PASS.
+    // The default is intentionally low so short smoke tests can pass, but it still
+    // catches a stalled synchronizer. Raise this for real 160 fps validation.
+    double minSyncFps = 1.0;
+    std::uint64_t minSyncSets = 0;
+
     int width = 0;
     int height = 0;
     int offsetX = -1;
@@ -119,6 +126,16 @@ Pipe::FrameSyncTimestampSource ParseTimestampSource(const std::string& text)
     throw std::runtime_error("--timestamp-source must be host, device, or auto");
 }
 
+const char* TimestampSourceName(Pipe::FrameSyncTimestampSource source) noexcept
+{
+    switch (source) {
+    case Pipe::FrameSyncTimestampSource::HostReceived: return "host";
+    case Pipe::FrameSyncTimestampSource::Device: return "device";
+    case Pipe::FrameSyncTimestampSource::Auto: return "auto";
+    default: return "unknown";
+    }
+}
+
 Options ParseOptions(int argc, char** argv)
 {
     Options o;
@@ -134,6 +151,10 @@ Options ParseOptions(int argc, char** argv)
     }
     if (const char* value = Arg(argc, argv, "--max-diff-us")) {
         o.maxDiffUs = std::strtoull(value, nullptr, 10);
+    }
+    o.minSyncFps = DoubleArg(argc, argv, "--min-sync-fps", o.minSyncFps);
+    if (const char* value = Arg(argc, argv, "--min-sync-sets")) {
+        o.minSyncSets = std::strtoull(value, nullptr, 10);
     }
 
     o.width = IntArg(argc, argv, "--width", o.width);
@@ -173,11 +194,12 @@ Options ParseOptions(int argc, char** argv)
     o.displayHeight = IntArg(argc, argv, "--display-max-height", o.displayHeight);
 
     if (o.device0 == o.device1 || o.warmupSec < 0 || o.durationSec <= 0 ||
-        o.reportMs <= 0 || o.maxDiffUs == 0 || o.ingressQueue <= 0 ||
-        o.latestQueue <= 0 || o.allFrameQueue <= 0 || o.poolInitial <= 0 ||
-        o.poolMaximum < o.poolInitial || o.pendingBuffers <= 0 ||
-        o.readTimeoutMs <= 0 || o.readbackTimeoutMs <= 0 ||
-        o.recordingFps <= 0.0 || o.codec.size() != 4) {
+        o.reportMs <= 0 || o.maxDiffUs == 0 || o.minSyncFps < 0.0 ||
+        o.ingressQueue <= 0 || o.latestQueue <= 0 || o.allFrameQueue <= 0 ||
+        o.poolInitial <= 0 || o.poolMaximum < o.poolInitial ||
+        o.pendingBuffers <= 0 || o.readTimeoutMs <= 0 ||
+        o.readbackTimeoutMs <= 0 || o.recordingFps <= 0.0 ||
+        o.codec.size() != 4) {
         throw std::runtime_error("invalid stress-test command-line options");
     }
     return o;
@@ -330,10 +352,8 @@ bool PipelinePassed(
     return true;
 }
 
-void PrintProgress(const std::vector<Pipeline>& pipelines, double seconds)
+void PrintPipelineProgress(const std::vector<Pipeline>& pipelines, double seconds)
 {
-    std::cout << std::fixed << std::setprecision(1)
-              << "[progress] seconds=" << seconds;
     for (const auto& pipeline : pipelines) {
         const auto metrics = pipeline.metrics->snapshot();
         const auto queue = pipeline.queue->stats();
@@ -345,6 +365,55 @@ void PrintProgress(const std::vector<Pipeline>& pipelines, double seconds)
                   << ",drop=" << queue.droppedOldest + queue.rejectedNew
                   << ",failure=" << metrics.failures << "}";
     }
+}
+
+void PrintProgress(
+    const std::vector<Pipeline>& pipelines,
+    const Pipe::FrameSyncThread& sync,
+    const Pipe::CameraCaptureThread& camera0,
+    const Pipe::CameraCaptureThread& camera1,
+    const Pipe::FrameSyncStats& syncBaseline,
+    const Pipe::CameraCaptureThreadStats& camera0Baseline,
+    const Pipe::CameraCaptureThreadStats& camera1Baseline,
+    const Pipe::FramePoolStats& pool0Baseline,
+    const Pipe::FramePoolStats& pool1Baseline,
+    double seconds)
+{
+    const auto syncStats = sync.stats();
+    const auto camera0Stats = camera0.stats();
+    const auto camera1Stats = camera1.stats();
+    const auto pool0 = camera0.framePoolStats();
+    const auto pool1 = camera1.framePoolStats();
+
+    const auto completed = Delta(syncStats.completedSets, syncBaseline.completedSets);
+    const auto dropped = Delta(syncStats.droppedFrames, syncBaseline.droppedFrames);
+    const auto input = Delta(syncStats.inputFrames, syncBaseline.inputFrames);
+    const auto cam0Read = Delta(camera0Stats.readFrames, camera0Baseline.readFrames);
+    const auto cam1Read = Delta(camera1Stats.readFrames, camera1Baseline.readFrames);
+    const auto cam0Push = Delta(camera0Stats.pushedFrames, camera0Baseline.pushedFrames);
+    const auto cam1Push = Delta(camera1Stats.pushedFrames, camera1Baseline.pushedFrames);
+
+    std::cout << std::fixed << std::setprecision(1)
+              << "[progress] seconds=" << seconds
+              << " sync{input=" << input
+              << ",sets=" << completed
+              << ",fps=" << (seconds > 0.0 ? completed / seconds : 0.0)
+              << ",drops=" << dropped
+              << ",dropRate=" << (input > 0 ? static_cast<double>(dropped) / input : 0.0)
+              << "} cam0{read=" << cam0Read
+              << ",push=" << cam0Push
+              << ",timeout=" << Delta(camera0Stats.readTimeouts, camera0Baseline.readTimeouts)
+              << ",err=" << Delta(camera0Stats.readErrors, camera0Baseline.readErrors)
+              << ",poolPub=" << pool0.published
+              << ",poolDrop=" << Delta(pool0.exhaustionDrops, pool0Baseline.exhaustionDrops)
+              << "} cam1{read=" << cam1Read
+              << ",push=" << cam1Push
+              << ",timeout=" << Delta(camera1Stats.readTimeouts, camera1Baseline.readTimeouts)
+              << ",err=" << Delta(camera1Stats.readErrors, camera1Baseline.readErrors)
+              << ",poolPub=" << pool1.published
+              << ",poolDrop=" << Delta(pool1.exhaustionDrops, pool1Baseline.exhaustionDrops)
+              << "}";
+    PrintPipelineProgress(pipelines, seconds);
     std::cout << std::endl;
 }
 
@@ -387,6 +456,13 @@ void WriteCsv(
              << drainSeconds << ',' << (passed ? 1 : 0) << ",\""
              << reason << "\"\n";
     }
+}
+
+std::uint64_t RequiredSyncSets(const Options& options, double measurementSeconds)
+{
+    const auto fromFps = static_cast<std::uint64_t>(
+        std::ceil(std::max(0.0, options.minSyncFps) * measurementSeconds));
+    return std::max(options.minSyncSets, fromFps);
 }
 
 } // namespace
@@ -581,7 +657,11 @@ int main(int argc, char** argv)
                      "independent readback per CPU consumer"
                   << " warmup=" << options.warmupSec
                   << "s duration=" << options.durationSec
-                  << "s allQueue=" << options.allFrameQueue
+                  << "s timestampSource=" << TimestampSourceName(options.timestampSource)
+                  << " maxDiffUs=" << options.maxDiffUs
+                  << " minSyncFps=" << options.minSyncFps
+                  << " minSyncSets=" << options.minSyncSets
+                  << " allQueue=" << options.allFrameQueue
                   << " latestQueue=" << options.latestQueue
                   << " recordingFps=" << options.recordingFps
                   << " codec=" << options.codec << std::endl;
@@ -622,8 +702,15 @@ int main(int argc, char** argv)
             if (now >= nextReport) {
                 PrintProgress(
                     pipelines,
-                    std::chrono::duration<double>(
-                        now - measurementStart).count());
+                    sync,
+                    camera0,
+                    camera1,
+                    syncBaseline,
+                    camera0Baseline,
+                    camera1Baseline,
+                    pool0Baseline,
+                    pool1Baseline,
+                    std::chrono::duration<double>(now - measurementStart).count());
                 nextReport = now + std::chrono::milliseconds(options.reportMs);
             }
         }
@@ -697,8 +784,14 @@ int main(int argc, char** argv)
         const auto pool0Final = camera0.framePoolStats();
         const auto pool1Final = camera1.framePoolStats();
 
+        const auto inputFrames = Delta(syncFinal.inputFrames, syncBaseline.inputFrames);
         const auto completedSets =
             Delta(syncFinal.completedSets, syncBaseline.completedSets);
+        const auto droppedFrames = Delta(syncFinal.droppedFrames, syncBaseline.droppedFrames);
+        const auto requiredSets = RequiredSyncSets(options, measurementSeconds);
+        const double syncFps = measurementSeconds > 0.0
+            ? static_cast<double>(completedSets) / measurementSeconds
+            : 0.0;
         const auto camera0Errors =
             Delta(camera0Final.readErrors, camera0Baseline.readErrors);
         const auto camera1Errors =
@@ -707,22 +800,44 @@ int main(int argc, char** argv)
             pool0Final.exhaustionDrops, pool0Baseline.exhaustionDrops);
         const auto pool1Drops = Delta(
             pool1Final.exhaustionDrops, pool1Baseline.exhaustionDrops);
-        if (completedSets == 0 || camera0Errors != 0 || camera1Errors != 0 ||
+        if (completedSets < requiredSets || camera0Errors != 0 || camera1Errors != 0 ||
             pool0Drops != 0 || pool1Drops != 0) {
             passed = false;
         }
 
-        std::cout << "syncSets=" << completedSets
-                  << " syncDrops="
-                  << Delta(syncFinal.droppedFrames, syncBaseline.droppedFrames)
+        std::cout << "syncInput=" << inputFrames
+                  << " syncSets=" << completedSets
+                  << " syncFps=" << syncFps
+                  << " minRequiredSets=" << requiredSets
+                  << " syncDrops=" << droppedFrames
+                  << " syncDropRate=" << (inputFrames > 0
+                          ? static_cast<double>(droppedFrames) / inputFrames
+                          : 0.0)
                   << " camera0Read="
                   << Delta(camera0Final.readFrames, camera0Baseline.readFrames)
                   << " camera1Read="
                   << Delta(camera1Final.readFrames, camera1Baseline.readFrames)
+                  << " camera0Pushed="
+                  << Delta(camera0Final.pushedFrames, camera0Baseline.pushedFrames)
+                  << " camera1Pushed="
+                  << Delta(camera1Final.pushedFrames, camera1Baseline.pushedFrames)
+                  << " camera0Timeouts="
+                  << Delta(camera0Final.readTimeouts, camera0Baseline.readTimeouts)
+                  << " camera1Timeouts="
+                  << Delta(camera1Final.readTimeouts, camera1Baseline.readTimeouts)
                   << " camera0Errors=" << camera0Errors
                   << " camera1Errors=" << camera1Errors
+                  << " pool0Published=" << pool0Final.published
+                  << " pool1Published=" << pool1Final.published
                   << " pool0Exhaustion=" << pool0Drops
                   << " pool1Exhaustion=" << pool1Drops << '\n';
+        if (completedSets < requiredSets) {
+            std::cout << "syncGate=FAIL completedSets=" << completedSets
+                      << " requiredSets=" << requiredSets
+                      << " hint=try a different --timestamp-source or larger --max-diff-us; "
+                         "if --hardware-trigger is set, verify continuous Line1 trigger pulses."
+                      << '\n';
+        }
         if (fatal.triggered()) {
             std::cout << "fatal=" << fatal.message() << '\n';
         }
