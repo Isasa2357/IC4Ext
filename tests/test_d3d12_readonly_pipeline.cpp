@@ -25,8 +25,13 @@ int main()
 
     FrameSyncConfig config;
     config.cameraIds = {0, 1};
-    config.policy = FrameSyncPolicy::FrameNumberExact;
+    config.timestampSource = FrameSyncTimestampSource::Auto;
+    config.maxTimestampDiffNs = 1'000'000;
     assert(config.isValid());
+
+    config.maxTimestampDiffNs = 0;
+    assert(!config.isValid());
+    config.maxTimestampDiffNs = 1'000'000;
 
     config.cameraIds = {0, 0};
     assert(!config.isValid());
