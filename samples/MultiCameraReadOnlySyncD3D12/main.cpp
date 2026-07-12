@@ -4,7 +4,6 @@
 #include <ThreadKit/Queues/QueueCommon.hpp>
 
 #include <algorithm>
-#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -58,14 +57,6 @@ IC4Ext::GpuFrameFormat ParseOutputFormat(const std::string& text)
     return IC4Ext::GpuFrameFormat::RGBA8;
 }
 
-IC4Ext::D3D12::FrameSyncPolicy ParseSyncPolicy(const std::string& text)
-{
-    if (text == "timestamp" || text == "TimestampNearest") {
-        return IC4Ext::D3D12::FrameSyncPolicy::TimestampNearest;
-    }
-    return IC4Ext::D3D12::FrameSyncPolicy::FrameNumberExact;
-}
-
 IC4Ext::D3D12::FrameSyncTimestampSource ParseTimestampSource(const std::string& text)
 {
     if (text == "host" || text == "HostReceived") {
@@ -75,6 +66,19 @@ IC4Ext::D3D12::FrameSyncTimestampSource ParseTimestampSource(const std::string& 
         return IC4Ext::D3D12::FrameSyncTimestampSource::Device;
     }
     return IC4Ext::D3D12::FrameSyncTimestampSource::Auto;
+}
+
+const char* ToString(IC4Ext::D3D12::FrameSyncTimestampSource source) noexcept
+{
+    switch (source) {
+    case IC4Ext::D3D12::FrameSyncTimestampSource::HostReceived:
+        return "host";
+    case IC4Ext::D3D12::FrameSyncTimestampSource::Device:
+        return "device";
+    case IC4Ext::D3D12::FrameSyncTimestampSource::Auto:
+    default:
+        return "auto";
+    }
 }
 
 bool CreateD3D12Backend(IC4Ext::D3D12BackendContext& outBackend)
@@ -251,11 +255,9 @@ int main(int argc, char** argv)
     const int poolInitial = ArgInt(argc, argv, "--pool-initial", 8);
     const int poolMax = ArgInt(argc, argv, "--pool-max", 32);
     const double singleOutputFps = ArgDouble(argc, argv, "--single-output-fps", 30.0);
-    const auto syncPolicy = ParseSyncPolicy(
-        ArgValue(argc, argv, "--sync-policy") ? ArgValue(argc, argv, "--sync-policy") : "frame-number");
     const auto timestampSource = ParseTimestampSource(
         ArgValue(argc, argv, "--timestamp-source") ? ArgValue(argc, argv, "--timestamp-source") : "auto");
-    const auto maxDiffUs = static_cast<std::uint64_t>(std::max(1, ArgInt(argc, argv, "--max-diff-us", 1000)));
+    const auto maxDiffUs = static_cast<std::uint64_t>(std::max(1, ArgInt(argc, argv, "--max-diff-us", 4000)));
 
     IC4Ext::IC4DeviceSelector selector0;
     selector0.deviceIndex = device0;
@@ -280,7 +282,6 @@ int main(int argc, char** argv)
 
     Pipe::FrameSyncConfig syncConfig;
     syncConfig.cameraIds = {0, 1};
-    syncConfig.policy = syncPolicy;
     syncConfig.timestampSource = timestampSource;
     syncConfig.maxTimestampDiffNs = maxDiffUs * 1000ull;
     syncConfig.maxBufferedFramesPerCamera = 16;
@@ -346,7 +347,9 @@ int main(int argc, char** argv)
     std::cout << "running MultiCameraReadOnlySyncD3D12 for " << durationSec
               << " sec. device0=" << device0
               << " device1=" << device1
-              << " syncPolicy=" << (syncPolicy == Pipe::FrameSyncPolicy::TimestampNearest ? "timestamp" : "frame-number")
+              << " sync=timestamp-nearest"
+              << " timestampSource=" << ToString(timestampSource)
+              << " maxDiffUs=" << maxDiffUs
               << std::endl;
 
     DrainStats stats;
