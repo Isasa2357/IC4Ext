@@ -31,9 +31,6 @@ struct D3D12FramePoolConfig
     D3D12_RESOURCE_STATES writeState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
     D3D12_RESOURCE_STATES publishedState = D3D12_RESOURCE_STATE_GENERIC_READ;
 
-    // A published v2 frame is always an SRV-capable read-only frame.
-    // createSrv therefore must remain true. createUav is optional so future
-    // producers can use COPY_DEST or render-target based write paths.
     bool createSrv = true;
     bool createUav = true;
 
@@ -53,6 +50,7 @@ struct D3D12FramePoolConfig
 struct D3D12FramePoolStats
 {
     std::size_t capacity = 0;
+    std::size_t maxCapacity = 0;
     std::size_t available = 0;
     std::size_t writing = 0;
     std::size_t published = 0;
@@ -60,6 +58,17 @@ struct D3D12FramePoolStats
     std::uint64_t dynamicAllocations = 0;
     std::uint64_t exhaustionDrops = 0;
     std::uint64_t waitTimeouts = 0;
+
+    std::size_t inFlight() const noexcept { return writing + published; }
+    bool exhausted() const noexcept { return available == 0 && capacity >= maxCapacity; }
+    double availableRatio() const noexcept
+    {
+        return capacity == 0 ? 0.0 : static_cast<double>(available) / static_cast<double>(capacity);
+    }
+    double inFlightRatio() const noexcept
+    {
+        return capacity == 0 ? 0.0 : static_cast<double>(inFlight()) / static_cast<double>(capacity);
+    }
 };
 
 class D3D12FrameWriter final
@@ -84,9 +93,6 @@ public:
     D3D12_GPU_DESCRIPTOR_HANDLE uavGpuHandle() const noexcept;
     DXGI_FORMAT dxgiFormat() const noexcept;
 
-    // initialState() is the state left by the previous publication of this pool
-    // entry. The producer must transition initialState() -> writeState() before
-    // writing and writeState() -> publishedState() before publish().
     D3D12_RESOURCE_STATES initialState() const noexcept;
     D3D12_RESOURCE_STATES writeState() const noexcept;
     D3D12_RESOURCE_STATES publishedState() const noexcept;
@@ -132,6 +138,10 @@ public:
     D3D12FrameWriter acquire();
 
     D3D12FramePoolStats stats() const;
+    std::size_t capacity() const;
+    std::size_t availableCount() const;
+    std::size_t inFlightCount() const;
+    bool hasAvailableFrame() const;
     ErrorInfo lastError() const;
 
 private:
