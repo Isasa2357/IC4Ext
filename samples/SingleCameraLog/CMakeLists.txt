@@ -1,5 +1,6 @@
 add_executable(SingleCameraLog main.cpp)
 target_link_libraries(SingleCameraLog PRIVATE IC4Ext::IC4Ext)
+ic4ext_copy_dxc_runtime_to_target(SingleCameraLog)
 
 if(WIN32 AND IC4_SDK_ROOT)
     add_custom_command(TARGET SingleCameraLog POST_BUILD
