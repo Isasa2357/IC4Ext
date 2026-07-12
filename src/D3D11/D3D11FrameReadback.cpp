@@ -74,6 +74,7 @@ bool D3D11FrameReadback::initialize(D3D11CoreLib::D3D11Core* core)
 {
     lastError_ = NoError();
     resetCache();
+    contextMutex_.reset();
     if (!core) {
         setError(
             ErrorCode::InvalidArgument,
@@ -92,11 +93,12 @@ bool D3D11FrameReadback::initialize(D3D11CoreLib::D3D11Core* core)
         return false;
     }
 
+    contextMutex_ = D3D11::Detail::AcquireImmediateContextMutex(context_.Get());
     Microsoft::WRL::ComPtr<ID3D11Multithread> multithread;
     if (SUCCEEDED(context_.As(&multithread)) && multithread) {
         multithread->SetMultithreadProtected(TRUE);
     }
-    return true;
+    return contextMutex_ != nullptr;
 }
 
 bool D3D11FrameReadback::initialize(
@@ -105,6 +107,7 @@ bool D3D11FrameReadback::initialize(
 {
     lastError_ = NoError();
     resetCache();
+    contextMutex_.reset();
     core_ = nullptr;
     if (!device || !context) {
         setError(
@@ -115,12 +118,13 @@ bool D3D11FrameReadback::initialize(
     }
     device_ = device;
     context_ = context;
+    contextMutex_ = D3D11::Detail::AcquireImmediateContextMutex(context_.Get());
 
     Microsoft::WRL::ComPtr<ID3D11Multithread> multithread;
     if (SUCCEEDED(context_.As(&multithread)) && multithread) {
         multithread->SetMultithreadProtected(TRUE);
     }
-    return true;
+    return contextMutex_ != nullptr;
 }
 
 void D3D11FrameReadback::resetCache() noexcept
@@ -210,6 +214,8 @@ bool D3D11FrameReadback::copyAndConvert(
     const FrameChunkMetadata& chunkMetadata,
     CpuFrame& out)
 {
+    D3D11::Detail::ImmediateContextSequenceLock contextSequence(contextMutex_);
+
     ++cacheStats_.readbacks;
     if (!ensureStagingTexture(desc)) return false;
 
