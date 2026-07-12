@@ -53,6 +53,22 @@ if(IC4EXT_ENABLE_D3D12)
 
     ic4ext_add_no_camera_test(test_d3d12_readonly_pipeline test_d3d12_readonly_pipeline.cpp)
 
+    ic4ext_add_no_camera_test(
+        test_d3d12_pooled_converter_device
+        test_d3d12_pooled_converter_device.cpp)
+    set_tests_properties(test_d3d12_pooled_converter_device PROPERTIES
+        LABELS "no_camera;d3d12_device"
+        SKIP_RETURN_CODE 77
+        TIMEOUT 120)
+
+    ic4ext_add_no_camera_test(
+        test_d3d12_dummy_capture_sync_integration
+        test_d3d12_dummy_capture_sync_integration.cpp)
+    set_tests_properties(test_d3d12_dummy_capture_sync_integration PROPERTIES
+        LABELS "no_camera;d3d12_device;integration"
+        SKIP_RETURN_CODE 77
+        TIMEOUT 120)
+
     ic4ext_add_no_camera_test(test_d3d12_shader_compile test_d3d12_shader_compile.cpp)
     target_compile_definitions(test_d3d12_shader_compile PRIVATE IC4EXT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/..")
     if(WIN32)
