@@ -32,7 +32,7 @@ int main()
     static_assert(std::is_move_constructible_v<Pipe::MultiCameraStartupResult>);
     static_assert(!std::is_copy_constructible_v<Pipe::MultiCameraStartupResult>);
 
-    Pipe::D3D12BackendContext backend;
+    IC4Ext::D3D12BackendContext backend;
 
     {
         const auto result = Pipe::OpenAndStartMultiCameraGroup(
