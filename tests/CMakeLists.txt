@@ -26,6 +26,7 @@ ic4ext_add_no_camera_test(test_core test_core.cpp)
 ic4ext_add_no_camera_test(test_cpu_frame test_cpu_frame.cpp)
 ic4ext_add_no_camera_test(test_backend_config test_backend_config.cpp)
 ic4ext_add_no_camera_test(test_chunk_metadata test_chunk_metadata.cpp)
+ic4ext_add_no_camera_test(test_multi_camera_startup_core test_multi_camera_startup_core.cpp)
 ic4ext_add_no_camera_test(test_no_camera_pipeline_stress test_no_camera_pipeline_stress.cpp)
 set_tests_properties(test_no_camera_pipeline_stress PROPERTIES TIMEOUT 120)
 
