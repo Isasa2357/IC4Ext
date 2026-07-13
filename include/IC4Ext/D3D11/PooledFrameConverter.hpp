@@ -41,6 +41,11 @@ public:
         FrameChunkMetadata chunkMetadata,
         D3D11ReadOnlyFrame& outFrame);
 
+    // Waits for every reusable converter slot submitted before this call.
+    // This is used by capture/source shutdown before converter-owned buffers are
+    // released. A timeout leaves the converter initialized and reports an error.
+    bool waitIdle(std::uint32_t timeoutMs = 5000) noexcept;
+
     D3D11PooledFrameConverterStats stats() const;
     ErrorInfo lastError() const;
 
