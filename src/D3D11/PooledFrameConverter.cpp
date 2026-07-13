@@ -4,8 +4,8 @@
 
 #include <D3D11Helper/D3D11Gpu/D3D11BindingSet.hpp>
 
-#include <array>
 #include <algorithm>
+#include <array>
 #include <exception>
 #include <limits>
 #include <mutex>
@@ -79,6 +79,23 @@ public:
             }
         }
     }
+
+    bool waitIdleLocked(std::uint32_t timeoutMs) noexcept
+    {
+        for (auto& slot : slots) {
+            if (!slot.inFlight.isValid()) continue;
+            if (!slot.inFlight.wait(timeoutMs)) {
+                setError(
+                    ErrorCode::Timeout,
+                    "D3D11PooledFrameConverter::waitIdle",
+                    "Timed out waiting for a submitted converter slot");
+                return false;
+            }
+            slot.inFlight = {};
+        }
+        error = NoError();
+        return true;
+    }
 };
 
 D3D11PooledFrameConverter::D3D11PooledFrameConverter()
@@ -86,7 +103,14 @@ D3D11PooledFrameConverter::D3D11PooledFrameConverter()
 {
 }
 
-D3D11PooledFrameConverter::~D3D11PooledFrameConverter() = default;
+D3D11PooledFrameConverter::~D3D11PooledFrameConverter()
+{
+    if (impl_) {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        impl_->waitIdleLocked(5000);
+    }
+}
+
 D3D11PooledFrameConverter::D3D11PooledFrameConverter(
     D3D11PooledFrameConverter&&) noexcept = default;
 D3D11PooledFrameConverter& D3D11PooledFrameConverter::operator=(
@@ -110,6 +134,7 @@ bool D3D11PooledFrameConverter::initialize(
         multithread->SetMultithreadProtected(TRUE);
     }
 
+    if (!impl_->waitIdleLocked(5000)) return false;
     impl_->converter = &converter;
     impl_->slots = {};
     impl_->nextSlot = 0;
@@ -371,6 +396,13 @@ bool D3D11PooledFrameConverter::convert(
     ++impl_->statsValue.conversions;
     impl_->error = NoError();
     return true;
+}
+
+bool D3D11PooledFrameConverter::waitIdle(std::uint32_t timeoutMs) noexcept
+{
+    if (!impl_) return true;
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    return impl_->waitIdleLocked(timeoutMs);
 }
 
 D3D11PooledFrameConverterStats D3D11PooledFrameConverter::stats() const
