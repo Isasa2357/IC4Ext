@@ -161,6 +161,28 @@ returns empty captures and captureThreads vectors with ErrorInfo
 
 The error message includes the logical camera ID and the failed startup stage.
 
+## Real-camera correctness test
+
+`test_multi_camera_startup_integration` is a short two-camera correctness test, not a stress test. It starts camera 0 as a direct `CameraCapture` and camera 1 as a `CameraCaptureThread`, receives one valid GPU frame from each path, waits both producer-ready tokens, and shuts the group down.
+
+```bat
+ctest --test-dir out\build\multi_camera_startup_d3d12 ^
+  -C Debug ^
+  --output-on-failure ^
+  -R "^test_multi_camera_startup_integration$" ^
+  -V
+```
+
+The test does not create or use `FrameSyncThread`. Device indices, timeouts, and the optional open delay can be supplied with:
+
+```text
+IC4EXT_TEST_DIRECT_DEVICE
+IC4EXT_TEST_THREADED_DEVICE
+IC4EXT_TEST_READ_TIMEOUT_MS
+IC4EXT_TEST_GPU_READY_TIMEOUT_MS
+IC4EXT_TEST_INTER_CAMERA_DELAY_MS
+```
+
 ## Shutdown
 
 The caller owns the returned objects. A safe shutdown sequence is:
