@@ -30,6 +30,12 @@ ic4ext_add_no_camera_test(test_multi_camera_startup_core test_multi_camera_start
 ic4ext_add_no_camera_test(test_no_camera_pipeline_stress test_no_camera_pipeline_stress.cpp)
 set_tests_properties(test_no_camera_pipeline_stress PROPERTIES TIMEOUT 120)
 
+ic4ext_add_camera_test(
+    test_multi_camera_startup_integration
+    camera2
+    test_multi_camera_startup_integration.cpp)
+set_tests_properties(test_multi_camera_startup_integration PROPERTIES TIMEOUT 180)
+
 if(IC4EXT_ENABLE_D3D11)
     ic4ext_add_no_camera_test(test_d3d11_frame_readback test_d3d11_frame_readback.cpp)
     set_tests_properties(test_d3d11_frame_readback PROPERTIES SKIP_RETURN_CODE 77)
