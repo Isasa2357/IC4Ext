@@ -2,7 +2,6 @@
 
 #include <IC4Ext/Core/MultiCameraStartup.hpp>
 
-#include <algorithm>
 #include <cstdint>
 #include <iostream>
 #include <string>
@@ -13,8 +12,6 @@ namespace {
 
 struct FakeBackend
 {
-    int failOpenId = -1;
-    int failPrepareStopId = -1;
     int failWorkerStartId = -1;
     int failAcquisitionStartId = -1;
     std::vector<std::string>* events = nullptr;
@@ -53,34 +50,14 @@ public:
         acquisitionActive_ =
             config.acquisitionStartMode == IC4Ext::AcquisitionStartMode::Immediate;
         log("open");
-
-        if (id_ == backend.failOpenId) {
-            error_ = IC4Ext::MakeError(
-                IC4Ext::ErrorCode::InternalError,
-                "FakeCapture::open",
-                "injected open failure");
-            return false;
-        }
         error_ = IC4Ext::NoError();
         return true;
     }
 
     bool stopAcquisition()
     {
-        if (!preparedStopDone_) {
-            log("prepare-stop");
-            if (backend_ && id_ == backend_->failPrepareStopId) {
-                error_ = IC4Ext::MakeError(
-                    IC4Ext::ErrorCode::InternalError,
-                    "FakeCapture::stopAcquisition",
-                    "injected prepare-stop failure");
-                return false;
-            }
-            preparedStopDone_ = true;
-        } else {
-            log("rollback-stop");
-        }
-
+        log(preparedStopDone_ ? "rollback-stop" : "prepare-stop");
+        preparedStopDone_ = true;
         acquisitionActive_ = false;
         error_ = IC4Ext::NoError();
         return true;
@@ -96,6 +73,7 @@ public:
                 "injected acquisition-start failure");
             return false;
         }
+
         acquisitionActive_ = true;
         error_ = IC4Ext::NoError();
         return true;
@@ -160,6 +138,7 @@ public:
                 "injected worker-start failure");
             return false;
         }
+
         running_ = true;
         error_ = IC4Ext::NoError();
         return true;
@@ -323,7 +302,7 @@ void TestMixedSuccessOrder()
         {Direct(10, 1)},
         {Threaded(20, 0)});
 
-    Check(result, "mixed startup should succeed");
+    Check(static_cast<bool>(result), "mixed startup should succeed");
     Check(result.captures.size() == 1, "one direct capture should be returned");
     Check(result.captureThreads.size() == 1, "one capture thread should be returned");
     Check(result.captures[0].cameraId == 10, "direct camera ID should be retained");
