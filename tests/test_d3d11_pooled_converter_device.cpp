@@ -164,6 +164,7 @@ int main()
         assert(poolStats.published == 0);
     }
 
+    assert(converter.waitIdle(5000));
     const auto stats = converter.stats();
     assert(stats.conversions == 8);
     assert(stats.inputBufferAllocations == 4);
