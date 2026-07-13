@@ -18,13 +18,13 @@ The helper opens a mixed group of cameras where each camera is selected independ
 
 ```cpp
 Pipe::MultiCameraStartupResult Pipe::OpenAndStartMultiCameraGroup(
-    const Pipe::D3D12BackendContext& backend,
+    const IC4Ext::D3D12BackendContext& backend,
     const std::vector<Pipe::CameraCaptureStartupConfig>& captureConfigs,
     const std::vector<Pipe::CameraCaptureThreadStartupConfig>& captureThreadConfigs,
     Pipe::MultiCameraStartupOptions options = {});
 ```
 
-D3D11 exposes the corresponding API and types in `IC4Ext::D3D11`.
+D3D11 exposes the corresponding API and types in `IC4Ext::D3D11` and accepts `IC4Ext::D3D11BackendContext`.
 
 ## Startup sequence
 
@@ -163,7 +163,7 @@ The error message includes the logical camera ID and the failed startup stage.
 
 ## Shutdown
 
-The caller owns the returned objects. Use the reverse lifecycle order:
+The caller owns the returned objects. A safe shutdown sequence is:
 
 ```cpp
 for (auto& thread : started.captureThreads) {
