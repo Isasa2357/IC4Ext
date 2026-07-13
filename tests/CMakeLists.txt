@@ -26,8 +26,15 @@ ic4ext_add_no_camera_test(test_core test_core.cpp)
 ic4ext_add_no_camera_test(test_cpu_frame test_cpu_frame.cpp)
 ic4ext_add_no_camera_test(test_backend_config test_backend_config.cpp)
 ic4ext_add_no_camera_test(test_chunk_metadata test_chunk_metadata.cpp)
+ic4ext_add_no_camera_test(test_multi_camera_startup_core test_multi_camera_startup_core.cpp)
 ic4ext_add_no_camera_test(test_no_camera_pipeline_stress test_no_camera_pipeline_stress.cpp)
 set_tests_properties(test_no_camera_pipeline_stress PROPERTIES TIMEOUT 120)
+
+ic4ext_add_camera_test(
+    test_multi_camera_startup_integration
+    camera2
+    test_multi_camera_startup_integration.cpp)
+set_tests_properties(test_multi_camera_startup_integration PROPERTIES TIMEOUT 180)
 
 if(IC4EXT_ENABLE_D3D11)
     ic4ext_add_no_camera_test(test_d3d11_frame_readback test_d3d11_frame_readback.cpp)
@@ -39,6 +46,10 @@ if(IC4EXT_ENABLE_D3D11)
     ic4ext_add_no_camera_test(
         test_d3d11_readonly_pipeline
         test_d3d11_readonly_pipeline.cpp)
+
+    ic4ext_add_no_camera_test(
+        test_d3d11_multi_camera_startup
+        test_d3d11_multi_camera_startup.cpp)
 
     ic4ext_add_no_camera_test(
         test_d3d11_pooled_converter_device
@@ -72,6 +83,10 @@ if(IC4EXT_ENABLE_D3D12)
     target_compile_definitions(test_d3d12_shader_reference PRIVATE IC4EXT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/..")
 
     ic4ext_add_no_camera_test(test_d3d12_readonly_pipeline test_d3d12_readonly_pipeline.cpp)
+
+    ic4ext_add_no_camera_test(
+        test_d3d12_multi_camera_startup
+        test_d3d12_multi_camera_startup.cpp)
 
     ic4ext_add_no_camera_test(
         test_d3d12_pooled_converter_device

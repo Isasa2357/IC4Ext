@@ -8,6 +8,7 @@
 #include "IC4Ext/D3D11/FrameSyncOutputConfig.hpp"
 #include "IC4Ext/D3D11/FrameSyncThread.hpp"
 #include "IC4Ext/D3D11/FrameSyncTypes.hpp"
+#include "IC4Ext/D3D11/MultiCameraStartup.hpp"
 #include "IC4Ext/D3D11/PooledFrameConverter.hpp"
 #include "IC4Ext/D3D11/ReadOnlyFrame.hpp"
 #include "IC4Ext/D3D11/ReadOnlyFrameLifetimeTracker.hpp"
