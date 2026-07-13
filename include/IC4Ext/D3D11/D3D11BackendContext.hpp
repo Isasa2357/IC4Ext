@@ -74,3 +74,12 @@ struct D3D11BackendContext
 };
 
 } // namespace IC4Ext
+
+namespace IC4Ext::D3D11 {
+
+// Namespace-local aliases make the backend bundle available through the same
+// public namespace as the rest of the D3D11 ReadOnly pipeline.
+using D3D11BackendContext = ::IC4Ext::D3D11BackendContext;
+using BackendContext = ::IC4Ext::D3D11BackendContext;
+
+} // namespace IC4Ext::D3D11
