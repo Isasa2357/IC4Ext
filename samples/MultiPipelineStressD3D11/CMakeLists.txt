@@ -1,4 +1,5 @@
 find_package(OpenCV REQUIRED COMPONENTS core imgproc highgui videoio)
+include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/IC4ExtOpenCVRuntime.cmake")
 
 add_executable(MultiPipelineStressD3D11
     StressRunner.cpp
@@ -20,6 +21,7 @@ target_include_directories(MultiPipelineStressD3D11
 
 target_compile_features(MultiPipelineStressD3D11 PRIVATE cxx_std_17)
 ic4ext_copy_dxc_runtime_to_target(MultiPipelineStressD3D11)
+ic4ext_copy_opencv_runtime_to_target(MultiPipelineStressD3D11)
 
 if(WIN32 AND IC4_SDK_ROOT)
     add_custom_command(TARGET MultiPipelineStressD3D11 POST_BUILD
