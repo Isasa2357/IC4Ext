@@ -41,6 +41,10 @@ if(IC4EXT_ENABLE_D3D11)
         test_d3d11_readonly_pipeline.cpp)
 
     ic4ext_add_no_camera_test(
+        test_d3d11_multi_camera_startup
+        test_d3d11_multi_camera_startup.cpp)
+
+    ic4ext_add_no_camera_test(
         test_d3d11_pooled_converter_device
         test_d3d11_pooled_converter_device.cpp)
     set_tests_properties(test_d3d11_pooled_converter_device PROPERTIES
@@ -72,6 +76,10 @@ if(IC4EXT_ENABLE_D3D12)
     target_compile_definitions(test_d3d12_shader_reference PRIVATE IC4EXT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/..")
 
     ic4ext_add_no_camera_test(test_d3d12_readonly_pipeline test_d3d12_readonly_pipeline.cpp)
+
+    ic4ext_add_no_camera_test(
+        test_d3d12_multi_camera_startup
+        test_d3d12_multi_camera_startup.cpp)
 
     ic4ext_add_no_camera_test(
         test_d3d12_pooled_converter_device
