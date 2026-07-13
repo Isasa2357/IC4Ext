@@ -21,3 +21,6 @@ add_subdirectory(
 add_subdirectory(
     "${CMAKE_CURRENT_SOURCE_DIR}/../MultiCameraReadOnlySyncD3D11"
     "${CMAKE_CURRENT_BINARY_DIR}/../MultiCameraReadOnlySyncD3D11")
+add_subdirectory(
+    "${CMAKE_CURRENT_SOURCE_DIR}/../MultiPipelineStressD3D11"
+    "${CMAKE_CURRENT_BINARY_DIR}/../MultiPipelineStressD3D11")
