@@ -1,6 +1,7 @@
 #pragma once
 
 #include "IC4Ext/Core/CoreTypes.hpp"
+#include "IC4Ext/Core/IC4SdkValidityCompatibility.hpp"
 
 #include <ic4/ic4.h>
 
@@ -56,7 +57,7 @@ inline void TryReadChunkUInt64(ic4::PropertyMap& props,
 }
 
 inline FrameChunkMetadata ReadChunkMetadata(ic4::Grabber* grabber,
-                                            const std::shared_ptr<ic4::ImageBuffer>& imageBuffer) noexcept
+                                             const std::shared_ptr<ic4::ImageBuffer>& imageBuffer) noexcept
 {
     FrameChunkMetadata metadata;
     if (!grabber || !(*grabber) || !imageBuffer) {
