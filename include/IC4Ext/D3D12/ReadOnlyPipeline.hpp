@@ -12,6 +12,7 @@
 #include "IC4Ext/D3D12/FrameSyncOutputConfig.hpp"
 #include "IC4Ext/D3D12/FrameSyncThread.hpp"
 #include "IC4Ext/D3D12/FrameSyncTypes.hpp"
+#include "IC4Ext/D3D12/MultiCameraStartup.hpp"
 #include "IC4Ext/D3D12/PooledFrameConverter.hpp"
 #include "IC4Ext/D3D12/ReadOnlyFrame.hpp"
 #include "IC4Ext/D3D12/ReadOnlyFrameLifetimeTracker.hpp"
