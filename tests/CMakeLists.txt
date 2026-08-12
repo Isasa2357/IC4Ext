@@ -88,6 +88,14 @@ if(IC4EXT_ENABLE_D3D12)
         test_d3d12_multi_camera_startup
         test_d3d12_multi_camera_startup.cpp)
 
+    ic4ext_add_camera_test(
+        test_d3d12_serial_selection_integration
+        camera2
+        test_d3d12_serial_selection_integration.cpp)
+    set_tests_properties(
+        test_d3d12_serial_selection_integration
+        PROPERTIES TIMEOUT 180)
+
     ic4ext_add_no_camera_test(
         test_d3d12_pooled_converter_device
         test_d3d12_pooled_converter_device.cpp)
