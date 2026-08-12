@@ -308,6 +308,7 @@ cmake --build out\build\v2_d3d12 ^
 詳細:
 
 ```text
+docs/READONLY_FRAME_USAGE.md
 docs/V2_PIPELINE_POLICY.md
 docs/d3d11/READONLY_PIPELINE.md
 samples/MultiPipelineStressD3D11/README.md
