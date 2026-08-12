@@ -35,6 +35,8 @@ test_d3d12_160fps_long_run_acceptance
 
 ## 2. 共通ビルド
 
+160 fps acceptanceを含むため、実機試験はRelease構成で統一する。
+
 ```bat
 set "IC4_SDK_ROOT=%LOCALAPPDATA%\Programs\The Imaging Source Europe GmbH\IC Imaging Control 4"
 set "IC4PATH=%IC4_SDK_ROOT%"
@@ -50,7 +52,7 @@ cmake -S . -B out\build\v2_pipeline_acceptance ^
   -DIC4EXT_FETCH_DXC_RUNTIME=ON
 
 cmake --build out\build\v2_pipeline_acceptance ^
-  --config Debug ^
+  --config Release ^
   --target test_d3d12_multi_camera_pipeline_acceptance ^
   --parallel
 ```
@@ -73,8 +75,10 @@ cmake --build out\build\v2_pipeline_acceptance ^
 30 fps request
 20 warmup sets
 100 measured sets
-10 ms host timestamp tolerance
+20 ms host timestamp tolerance
 ```
+
+free-runでは2台のcamera phaseが独立しているため、CTest登録時に20 ms toleranceを明示する。hardware-trigger modeの4 ms toleranceとは分けて扱う。
 
 実行:
 
@@ -85,7 +89,7 @@ set "IC4EXT_TEST_FORMAT=BGR8"
 set "IC4EXT_TEST_FPS=30"
 
 ctest --test-dir out\build\v2_pipeline_acceptance ^
-  -C Debug ^
+  -C Release ^
   --output-on-failure ^
   -V ^
   -R "^test_d3d12_multi_camera_pipeline_e2e$"
@@ -101,7 +105,8 @@ ctest --test-dir out\build\v2_pipeline_acceptance ^
 - default sourceは`Line1`。
 - test開始時点では外部trigger generatorを停止しておく。
 - helperが2台をopen、prepare-stop、worker start、AcquisitionStartした後に、consoleへ`cameras are armed`と表示される。
-- `IC4EXT_TEST_TRIGGER_ARM_DELAY_MS`の待機中に外部triggerを開始する。
+- 表示後すぐに外部trigger generatorを開始する。
+- `IC4EXT_TEST_TRIGGER_ARM_DELAY_MS=1`は通知を表示させるためだけの最小待機であり、trigger開始前にoutput queueを蓄積させない。
 
 ### 4.2 実行例
 
@@ -110,7 +115,8 @@ set "IC4EXT_TEST_ENABLE_HW_ACCEPTANCE=1"
 set "IC4EXT_TEST_CAMERA0_DEVICE=0"
 set "IC4EXT_TEST_CAMERA1_DEVICE=1"
 set "IC4EXT_TEST_TRIGGER_SOURCE=Line1"
-set "IC4EXT_TEST_TRIGGER_ARM_DELAY_MS=10000"
+set "IC4EXT_TEST_TRIGGER_ARM_DELAY_MS=1"
+set "IC4EXT_TEST_SYNC_TIMEOUT_SECONDS=60"
 set "IC4EXT_TEST_FPS=160"
 set "IC4EXT_TEST_EXPECTED_FPS=160"
 set "IC4EXT_TEST_FORMAT=BayerRG8"
@@ -119,13 +125,13 @@ set "IC4EXT_TEST_WARMUP_SETS=100"
 set "IC4EXT_TEST_SYNC_SETS=1000"
 
 ctest --test-dir out\build\v2_pipeline_acceptance ^
-  -C Debug ^
+  -C Release ^
   --output-on-failure ^
   -V ^
   -R "^test_d3d12_hardware_trigger_pipeline_smoke$"
 ```
 
-`cameras are armed`が表示されたら、10秒以内に外部trigger generatorを開始する。
+`cameras are armed`が表示されたら、外部trigger generatorを直ちに開始する。collection loopはそのまま待機しており、defaultより長い60秒のstartup timeout内に最初の同期setが届けばよい。
 
 このmodeは、次を確認する。
 
@@ -165,7 +171,8 @@ set "IC4EXT_TEST_ENABLE_LONG_RUN_ACCEPTANCE=1"
 set "IC4EXT_TEST_CAMERA0_DEVICE=0"
 set "IC4EXT_TEST_CAMERA1_DEVICE=1"
 set "IC4EXT_TEST_TRIGGER_SOURCE=Line1"
-set "IC4EXT_TEST_TRIGGER_ARM_DELAY_MS=10000"
+set "IC4EXT_TEST_TRIGGER_ARM_DELAY_MS=1"
+set "IC4EXT_TEST_SYNC_TIMEOUT_SECONDS=60"
 set "IC4EXT_TEST_FORMAT=BayerRG8"
 set "IC4EXT_TEST_WIDTH=1536"
 set "IC4EXT_TEST_HEIGHT=1536"
@@ -179,11 +186,13 @@ set "IC4EXT_TEST_FRAME_POOL_INITIAL=64"
 set "IC4EXT_TEST_FRAME_POOL_MAX=256"
 
 ctest --test-dir out\build\v2_pipeline_acceptance ^
-  -C Debug ^
+  -C Release ^
   --output-on-failure ^
   -V ^
   -R "^test_d3d12_160fps_long_run_acceptance$"
 ```
+
+`cameras are armed`表示後に外部trigger generatorを開始する。
 
 ### 5.2 30分acceptance
 
@@ -191,11 +200,13 @@ ctest --test-dir out\build\v2_pipeline_acceptance ^
 set "IC4EXT_TEST_ACCEPTANCE_SECONDS=1800"
 
 ctest --test-dir out\build\v2_pipeline_acceptance ^
-  -C Debug ^
+  -C Release ^
   --output-on-failure ^
   -V ^
   -R "^test_d3d12_160fps_long_run_acceptance$"
 ```
+
+各実行前に外部trigger generatorを停止状態へ戻し、`cameras are armed`表示後に再度開始する。
 
 カメラ固有の160 fps設定にIC Capture JSONが必要な場合は、`IC4EXT_TEST_IC4_JSON_0`と`IC4EXT_TEST_IC4_JSON_1`を設定する。明示的なWidth、Height、PixelFormat、FPSはJSON適用後のtest設定と整合させる。
 
@@ -241,7 +252,7 @@ warmup完了時のstatsをbaselineとし、外部trigger開始前やstartup中�
 | `IC4EXT_TEST_CAMERA0_DEVICE` | camera 0の列挙index | 0 |
 | `IC4EXT_TEST_CAMERA1_DEVICE` | camera 1の列挙index | 1 |
 | `IC4EXT_TEST_TRIGGER_SOURCE` | hardware trigger source | `Line1` |
-| `IC4EXT_TEST_TRIGGER_ARM_DELAY_MS` | helper完了後、trigger開始までのoperator時間 | 0 |
+| `IC4EXT_TEST_TRIGGER_ARM_DELAY_MS` | helper完了後の通知用待機 | 0 |
 | `IC4EXT_TEST_FPS` | camera stream request FPS | mode依存 |
 | `IC4EXT_TEST_EXPECTED_FPS` | acceptanceで期待する同期FPS | mode依存 |
 | `IC4EXT_TEST_WARMUP_SETS` | stats baseline前の同期set数 | mode依存 |
