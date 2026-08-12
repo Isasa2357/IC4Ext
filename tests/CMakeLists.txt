@@ -109,6 +109,7 @@ if(IC4EXT_ENABLE_D3D12)
         NAME test_d3d12_multi_camera_pipeline_e2e
         COMMAND ${CMAKE_COMMAND} -E env
             "IC4EXT_TEST_PIPELINE_MODE=free-run"
+            "IC4EXT_TEST_SYNC_TOLERANCE_NS=20000000"
             $<TARGET_FILE:test_d3d12_multi_camera_pipeline_acceptance>)
     set_tests_properties(
         test_d3d12_multi_camera_pipeline_e2e
