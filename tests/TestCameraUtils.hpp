@@ -13,6 +13,12 @@
 #include <string>
 #include <thread>
 
+#if IC4EXT_ENABLE_D3D12
+namespace IC4Ext::D3D12 {
+using D3D12BackendContext = ::IC4Ext::D3D12BackendContext;
+}
+#endif
+
 namespace IC4ExtTest {
 
 inline const char* Env(const char* name)
