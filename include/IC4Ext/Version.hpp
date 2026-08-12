@@ -1,9 +1,9 @@
 #pragma once
 
-#define IC4EXT_VERSION_MAJOR 1
+#define IC4EXT_VERSION_MAJOR 2
 #define IC4EXT_VERSION_MINOR 0
-#define IC4EXT_VERSION_PATCH 1
-#define IC4EXT_VERSION_STRING "1.0.1"
+#define IC4EXT_VERSION_PATCH 0
+#define IC4EXT_VERSION_STRING "2.0.0"
 
 namespace IC4Ext {
 
