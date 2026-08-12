@@ -46,6 +46,28 @@ IC4 ImageBuffer
 
 両backendとも`CameraCaptureThread`と`FrameSyncThread`はoutputごとのGPU texture copyを行わない。fan-outでは同じReadOnly resourceへのshared handleを渡す。
 
+## v2 pipeline policy
+
+IC4Ext v2が提供する正式なframe pipelineは、次の多入力・多出力構成のみである。
+
+```text
+CameraCaptureThread x N
+    -> one shared ingress queue
+    -> one central FrameSyncThread
+    -> ReadOnlyFrameSetQueue x N
+    -> consumers
+```
+
+`CameraCaptureThread`は1台のcameraを継続的にreadし、中央同期用queueへ`ReadOnlyFrame`を提出する。`FrameSyncThread`はcameraを所有せず、cameraから直接readしない。複数入力のtimestamp matchingと、複数outputへの配送制御だけを担当する。
+
+capture層とsync層は、fan-outのためのGPU texture copy、resize、format conversion、blur、remap、推論前処理などを行わない。複数outputへ渡すのは同じTextureを共有保持する`ReadOnlyFrame`または`ReadOnlyFrameSet`である。
+
+resizeやその他の画像処理が必要なconsumerは、入力TextureをReadOnlyとして使用し、自分専用のdestination resourceまたはoutput poolへ結果を書き込む。consumerはGPU処理完了まで入力frameのlifetimeを保持する。
+
+`FrameSyncOutputConfig`は、`requiredCameras`、FPS、priority、enabledという配送設定だけを持つ。resize sizeやprocessing optionは追加しない。
+
+詳細な共通方針は[`docs/V2_PIPELINE_POLICY.md`](docs/V2_PIPELINE_POLICY.md)を参照する。
+
 ## 2. Compatibility policy
 
 v1 physical-copy fan-out APIとのsource compatibilityは保証しない。新規コードは`IC4Ext::D3D11`または`IC4Ext::D3D12`のReadOnly APIを使う。
@@ -60,9 +82,11 @@ D3D12実装の一部は物理移動途中で`include/IC4Ext/V2` / `src/V2`に残
 | IC4 bytesから最終FramePoolへのdirect conversion | 実装済み | 実装済み |
 | CameraCapture-owned FramePool | 実装済み | 実装済み |
 | reusable input buffer | 実装済み | 実装済み |
-| central timestamp-nearest sync | 実装済み | 実装済み |
+| central multi-input / multi-output timestamp sync | 実装済み | 実装済み |
 | runtime output register/update/remove | 実装済み | 実装済み |
 | required cameras / FPS / priority | 実装済み | 実装済み |
+| shared ReadOnly fan-out without per-output GPU copy | 実装済み | 実装済み |
+| capture/sync layer resize or post-process | 非提供（consumer責務） | 非提供（consumer責務） |
 | ReadOnly lifetime tracker | 実装済み | 実装済み |
 | ReadOnly readback | 実装済み | 実装済み |
 | camera-free SyntheticFrameSource | 実装済み | 実装済み |
@@ -86,7 +110,7 @@ D3D12実装の一部は物理移動途中で`include/IC4Ext/V2` / `src/V2`に残
 - exposure、gain、gamma、fps、ROI、offset、PixelFormat、任意property setter。
 - GPU producer-ready fence token。
 - FramePoolとReadOnly共有fan-out。
-- timestamp-nearest中央同期。
+- 単一の中央`FrameSyncThread`による多入力・多出力timestamp-nearest同期。
 - outputごとのrequired cameras、FPS、priority、enabled。
 - outputの実行中追加、更新、queue差替え、削除。
 - consumer GPU completionまでのlifetime tracking。
@@ -94,6 +118,8 @@ D3D12実装の一部は物理移動途中で`include/IC4Ext/V2` / `src/V2`に残
 - D3D11 staging texture cache / D3D12 readback buffer cache。
 - camera-free source injection。
 - D3D11/D3D12 10-pipeline stress sample。
+
+resize、format conversion、post-processなど、consumerごとに異なる画像処理はIC4Extのcapture/sync pipelineでは行わない。必要なconsumerが専用のoutput resourceを所有して実行する。
 
 ## 5. Supported formats
 
@@ -282,6 +308,7 @@ cmake --build out\build\v2_d3d12 ^
 詳細:
 
 ```text
+docs/V2_PIPELINE_POLICY.md
 docs/d3d11/READONLY_PIPELINE.md
 samples/MultiPipelineStressD3D11/README.md
 docs/d3d12/READONLY_PIPELINE.md
