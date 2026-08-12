@@ -96,6 +96,60 @@ if(IC4EXT_ENABLE_D3D12)
         test_d3d12_serial_selection_integration
         PROPERTIES TIMEOUT 180)
 
+    add_executable(
+        test_d3d12_multi_camera_pipeline_acceptance
+        test_d3d12_multi_camera_pipeline_acceptance.cpp)
+    target_link_libraries(
+        test_d3d12_multi_camera_pipeline_acceptance
+        PRIVATE IC4Ext::IC4Ext)
+    ic4ext_copy_dxc_runtime_to_target(
+        test_d3d12_multi_camera_pipeline_acceptance)
+
+    add_test(
+        NAME test_d3d12_multi_camera_pipeline_e2e
+        COMMAND ${CMAKE_COMMAND} -E env
+            "IC4EXT_TEST_PIPELINE_MODE=free-run"
+            $<TARGET_FILE:test_d3d12_multi_camera_pipeline_acceptance>)
+    set_tests_properties(
+        test_d3d12_multi_camera_pipeline_e2e
+        PROPERTIES
+            LABELS "camera2;integration;v2"
+            SKIP_RETURN_CODE 77
+            RESOURCE_LOCK "ic4_camera"
+            RUN_SERIAL TRUE
+            TIMEOUT 180
+            WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
+
+    add_test(
+        NAME test_d3d12_hardware_trigger_pipeline_smoke
+        COMMAND ${CMAKE_COMMAND} -E env
+            "IC4EXT_TEST_PIPELINE_MODE=hardware-trigger"
+            $<TARGET_FILE:test_d3d12_multi_camera_pipeline_acceptance>)
+    set_tests_properties(
+        test_d3d12_hardware_trigger_pipeline_smoke
+        PROPERTIES
+            LABELS "camera2;integration;v2;hardware_trigger;manual"
+            SKIP_RETURN_CODE 77
+            RESOURCE_LOCK "ic4_camera"
+            RUN_SERIAL TRUE
+            TIMEOUT 600
+            WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
+
+    add_test(
+        NAME test_d3d12_160fps_long_run_acceptance
+        COMMAND ${CMAKE_COMMAND} -E env
+            "IC4EXT_TEST_PIPELINE_MODE=long-run-160fps"
+            $<TARGET_FILE:test_d3d12_multi_camera_pipeline_acceptance>)
+    set_tests_properties(
+        test_d3d12_160fps_long_run_acceptance
+        PROPERTIES
+            LABELS "camera2;integration;v2;hardware_trigger;manual;long_run;acceptance"
+            SKIP_RETURN_CODE 77
+            RESOURCE_LOCK "ic4_camera"
+            RUN_SERIAL TRUE
+            TIMEOUT 7200
+            WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
+
     ic4ext_add_no_camera_test(
         test_d3d12_pooled_converter_device
         test_d3d12_pooled_converter_device.cpp)
