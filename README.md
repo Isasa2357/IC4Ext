@@ -94,7 +94,9 @@ D3D12実装の一部は物理移動途中で`include/IC4Ext/V2` / `src/V2`に残
 | IC4 JSON / runtime property setters | 実装済み | 実装済み |
 | Chunk metadata / performance snapshot | 実装済み | 実装済み |
 | 10/12/16bit and packed formats | 未実装 | 未実装 |
-| 2-camera 160 fps long-run acceptance | 未検証 | 検証中 |
+| 2-camera 160 fps long-run acceptance | 未検証 | 実機検証済み（1536x1536、hardware trigger、30分、159.998 fps） |
+
+D3D12 acceptanceの手順と合格条件は[`docs/d3d12/MULTI_CAMERA_PIPELINE_ACCEPTANCE.md`](docs/d3d12/MULTI_CAMERA_PIPELINE_ACCEPTANCE.md)を参照する。
 
 動画encoderはcamera GPU resource提供libraryであるIC4Ext本体の責務に含めない。OpenCV `VideoWriter`はstress sampleのconsumer workloadである。
 
@@ -311,7 +313,8 @@ cmake --build out\build\v2_d3d12 ^
 docs/READONLY_FRAME_USAGE.md
 docs/V2_PIPELINE_POLICY.md
 docs/d3d11/READONLY_PIPELINE.md
-samples/MultiPipelineStressD3D11/README.md
 docs/d3d12/READONLY_PIPELINE.md
+docs/d3d12/MULTI_CAMERA_PIPELINE_ACCEPTANCE.md
+samples/MultiPipelineStressD3D11/README.md
 samples/MultiPipelineStressD3D12/README.md
 ```
