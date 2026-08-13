@@ -66,7 +66,9 @@ resizeやその他の画像処理が必要なconsumerは、入力TextureをReadO
 
 `FrameSyncOutputConfig`は、`requiredCameras`、FPS、priority、enabledという配送設定だけを持つ。resize sizeやprocessing optionは追加しない。
 
-詳細な共通方針は[`docs/V2_PIPELINE_POLICY.md`](docs/V2_PIPELINE_POLICY.md)を参照する。
+出力queueは登録後に置換しない。置換相当の変更は新規outputを追加し、旧outputを`stopOutputSupply()`、必要に応じてdrain/clearした後、`closeOutputChannel()`する。供給停止は同期barrierであり、復帰後に対象outputへのlate pushは発生しない。
+
+詳細な共通方針は[`docs/V2_PIPELINE_POLICY.md`](docs/V2_PIPELINE_POLICY.md)、出力の二段階終了は[`docs/OUTPUT_LIFECYCLE.md`](docs/OUTPUT_LIFECYCLE.md)を参照する。
 
 ## 2. Compatibility policy
 
@@ -83,7 +85,7 @@ D3D12実装の一部は物理移動途中で`include/IC4Ext/V2` / `src/V2`に残
 | CameraCapture-owned FramePool | 実装済み | 実装済み |
 | reusable input buffer | 実装済み | 実装済み |
 | central multi-input / multi-output timestamp sync | 実装済み | 実装済み |
-| runtime output register/update/remove | 実装済み | 実装済み |
+| runtime output add/update/two-stage retirement | 実装済み | 実装済み |
 | required cameras / FPS / priority | 実装済み | 実装済み |
 | shared ReadOnly fan-out without per-output GPU copy | 実装済み | 実装済み |
 | capture/sync layer resize or post-process | 非提供（consumer責務） | 非提供（consumer責務） |
@@ -114,7 +116,8 @@ D3D12 acceptanceの手順と合格条件は[`docs/d3d12/MULTI_CAMERA_PIPELINE_AC
 - FramePoolとReadOnly共有fan-out。
 - 単一の中央`FrameSyncThread`による多入力・多出力timestamp-nearest同期。
 - outputごとのrequired cameras、FPS、priority、enabled。
-- outputの実行中追加、更新、queue差替え、削除。
+- outputの実行中追加・更新、同期的な供給停止、queue closeとregistry解放の二段階終了。
+- 1つのoutput faultを他outputと中央workerから分離。
 - consumer GPU completionまでのlifetime tracking。
 - GPU frameからtight-packed `CpuFrame`へのreadback。
 - D3D11 staging texture cache / D3D12 readback buffer cache。
@@ -197,8 +200,8 @@ set "IC4PATH=%IC4_SDK_ROOT%"
 set "IC4EXT_OK=1"
 
 git fetch origin
-git switch agent/ic4ext-v2-d3d11-readonly-foundation
-git pull --ff-only origin agent/ic4ext-v2-d3d11-readonly-foundation
+git switch main
+git pull --ff-only origin main
 
 cmake -S . -B out\build\v2_d3d11 ^
   -G "Visual Studio 17 2022" ^
@@ -218,6 +221,7 @@ if "%IC4EXT_OK%"=="1" cmake --build out\build\v2_d3d11 ^
     test_d3d11_readonly_pipeline ^
     test_d3d11_pooled_converter_device ^
     test_d3d11_synthetic_source_sync_integration ^
+    test_d3d11_dynamic_output_lifecycle ^
   --parallel
 
 if errorlevel 1 set "IC4EXT_OK=0"
@@ -226,7 +230,7 @@ if "%IC4EXT_OK%"=="0" echo [ERROR] build failed. CMD remains open.
 if "%IC4EXT_OK%"=="1" ctest --test-dir out\build\v2_d3d11 ^
   -C Debug ^
   --output-on-failure ^
-  -R "test_d3d11_(readonly_pipeline|pooled_converter_device|synthetic_source_sync_integration)"
+  -R "test_d3d11_(readonly_pipeline|pooled_converter_device|synthetic_source_sync_integration|dynamic_output_lifecycle)"
 ```
 
 ## 9. Build: D3D12 ReadOnly
@@ -237,12 +241,13 @@ set "IC4PATH=%IC4_SDK_ROOT%"
 set "IC4EXT_OK=1"
 
 git fetch origin
-git switch agent/ic4ext-v2-d3d12-foundation
-git pull --ff-only origin agent/ic4ext-v2-d3d12-foundation
+git switch main
+git pull --ff-only origin main
 
 cmake -S . -B out\build\v2_d3d12 ^
   -G "Visual Studio 17 2022" ^
   -A x64 ^
+  -DIC4_SDK_ROOT="%IC4_SDK_ROOT%" ^
   -DIC4EXT_ENABLE_D3D11=OFF ^
   -DIC4EXT_ENABLE_D3D12=ON ^
   -DIC4EXT_BUILD_SAMPLES=ON ^
@@ -251,6 +256,23 @@ cmake -S . -B out\build\v2_d3d12 ^
 
 if errorlevel 1 set "IC4EXT_OK=0"
 if "%IC4EXT_OK%"=="0" echo [ERROR] configure failed. CMD remains open.
+
+if "%IC4EXT_OK%"=="1" cmake --build out\build\v2_d3d12 ^
+  --config Debug ^
+  --target ^
+    test_d3d12_readonly_pipeline ^
+    test_d3d12_pooled_converter_device ^
+    test_d3d12_synthetic_source_sync_integration ^
+    test_d3d12_dynamic_output_lifecycle ^
+  --parallel
+
+if errorlevel 1 set "IC4EXT_OK=0"
+if "%IC4EXT_OK%"=="0" echo [ERROR] build failed. CMD remains open.
+
+if "%IC4EXT_OK%"=="1" ctest --test-dir out\build\v2_d3d12 ^
+  -C Debug ^
+  --output-on-failure ^
+  -R "test_d3d12_(readonly_pipeline|pooled_converter_device|synthetic_source_sync_integration|dynamic_output_lifecycle)"
 ```
 
 ## 10. OpenCV stress samples
@@ -311,6 +333,7 @@ cmake --build out\build\v2_d3d12 ^
 
 ```text
 docs/READONLY_FRAME_USAGE.md
+docs/OUTPUT_LIFECYCLE.md
 docs/V2_PIPELINE_POLICY.md
 docs/d3d11/READONLY_PIPELINE.md
 docs/d3d12/READONLY_PIPELINE.md

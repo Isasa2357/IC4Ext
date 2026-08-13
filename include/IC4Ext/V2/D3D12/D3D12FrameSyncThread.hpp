@@ -35,14 +35,18 @@ public:
         FrameSyncOutputConfig config);
 
     bool updateOutput(FrameSyncOutputId outputId, FrameSyncOutputConfig config);
-    bool replaceOutputQueue(
-        FrameSyncOutputId outputId,
-        std::shared_ptr<D3D12ReadOnlyFrameSetQueue> outputQueue);
-    bool unregisterOutput(FrameSyncOutputId outputId);
+    bool stopOutputSupply(FrameSyncOutputId outputId);
+    bool closeOutputChannel(FrameSyncOutputId outputId);
 
-    std::optional<FrameSyncOutputConfig> outputConfig(FrameSyncOutputId outputId) const;
+    std::optional<FrameSyncOutputConfig> outputConfig(
+        FrameSyncOutputId outputId) const;
+    std::optional<FrameSyncOutputState> outputState(
+        FrameSyncOutputId outputId) const;
     std::vector<FrameSyncOutputInfo> outputs() const;
-    std::optional<FrameSyncOutputStats> outputStats(FrameSyncOutputId outputId) const;
+    std::optional<FrameSyncOutputStats> outputStats(
+        FrameSyncOutputId outputId) const;
+    std::optional<ErrorInfo> outputLastError(
+        FrameSyncOutputId outputId) const;
 
     const FrameSyncConfig& config() const noexcept;
     FrameSyncStats stats() const;

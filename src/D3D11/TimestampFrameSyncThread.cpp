@@ -8,9 +8,12 @@
 #include <cmath>
 #include <cstdint>
 #include <deque>
+#include <exception>
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -86,6 +89,8 @@ struct OutputCounters
     std::atomic<std::uint64_t> emittedSets{0};
     std::atomic<std::uint64_t> queueDrops{0};
     std::atomic<std::uint64_t> disabledSkips{0};
+    std::atomic<std::uint64_t> dispatchErrors{0};
+    std::atomic<std::uint64_t> closedQueuePushes{0};
 
     FrameSyncOutputStats snapshot() const noexcept
     {
@@ -96,6 +101,9 @@ struct OutputCounters
         result.emittedSets = emittedSets.load(std::memory_order_relaxed);
         result.queueDrops = queueDrops.load(std::memory_order_relaxed);
         result.disabledSkips = disabledSkips.load(std::memory_order_relaxed);
+        result.dispatchErrors = dispatchErrors.load(std::memory_order_relaxed);
+        result.closedQueuePushes =
+            closedQueuePushes.load(std::memory_order_relaxed);
         return result;
     }
 };
@@ -108,18 +116,19 @@ struct OutputEntry
     FrameSyncOutputConfig config;
     std::shared_ptr<OutputCounters> counters;
     RateGate rateGate{FrameRateLimit::Maximum()};
+    FrameSyncOutputState state = FrameSyncOutputState::Active;
+    ErrorInfo lastError;
 
     OutputEntry(
         FrameSyncOutputId outputId,
         std::uint64_t order,
         std::shared_ptr<D3D11ReadOnlyFrameSetQueue> outputQueue,
-        FrameSyncOutputConfig outputConfig,
-        std::shared_ptr<OutputCounters> outputCounters)
+        FrameSyncOutputConfig outputConfig)
         : id(outputId),
           registrationOrder(order),
           queue(std::move(outputQueue)),
           config(std::move(outputConfig)),
-          counters(std::move(outputCounters)),
+          counters(std::make_shared<OutputCounters>()),
           rateGate(config.frameRate)
     {
     }
@@ -150,10 +159,6 @@ public:
         FrameSyncConfig config)
         : inputQueue(std::move(input)), configValue(std::move(config))
     {
-        std::atomic_store_explicit(
-            &outputTable,
-            std::shared_ptr<const OutputTable>(std::make_shared<OutputTable>()),
-            std::memory_order_release);
     }
 
     ~Impl() { stopAndJoin(); }
@@ -250,25 +255,40 @@ public:
                 "Output queue is null");
             return InvalidFrameSyncOutputId;
         }
+        if (queue->isClosed()) {
+            setError(
+                ErrorCode::InvalidArgument,
+                "D3D11FrameSyncThread::registerOutput",
+                "Output queue is already closed");
+            return InvalidFrameSyncOutputId;
+        }
         if (!validateOutputConfig(
                 config,
                 "D3D11FrameSyncThread::registerOutput")) {
             return InvalidFrameSyncOutputId;
         }
 
-        std::lock_guard<std::mutex> lock(outputUpdateMutex);
-        auto current = loadOutputTable();
-        auto next = std::make_shared<OutputTable>(*current);
+        std::lock_guard<std::mutex> lock(outputLifecycleMutex);
+        const auto duplicate = std::find_if(
+            outputTable.begin(),
+            outputTable.end(),
+            [&queue](const auto& entry) { return entry->queue == queue; });
+        if (duplicate != outputTable.end()) {
+            setError(
+                ErrorCode::InvalidArgument,
+                "D3D11FrameSyncThread::registerOutput",
+                "The same output queue is already registered");
+            return InvalidFrameSyncOutputId;
+        }
+
         const FrameSyncOutputId id = nextOutputId++;
         const std::uint64_t order = nextRegistrationOrder++;
-        next->push_back(std::make_shared<OutputEntry>(
+        outputTable.push_back(std::make_shared<OutputEntry>(
             id,
             order,
             std::move(queue),
-            std::move(config),
-            std::make_shared<OutputCounters>()));
-        SortOutputTable(*next);
-        storeOutputTable(std::move(next));
+            std::move(config)));
+        SortOutputTable(outputTable);
         clearError();
         return id;
     }
@@ -281,101 +301,81 @@ public:
             return false;
         }
 
-        std::lock_guard<std::mutex> lock(outputUpdateMutex);
-        auto current = loadOutputTable();
-        auto next = std::make_shared<OutputTable>();
-        next->reserve(current->size());
-        bool found = false;
-        for (const auto& entry : *current) {
-            if (entry->id == id) {
-                next->push_back(std::make_shared<OutputEntry>(
-                    entry->id,
-                    entry->registrationOrder,
-                    entry->queue,
-                    config,
-                    entry->counters));
-                found = true;
-            } else {
-                next->push_back(entry);
-            }
-        }
-        if (!found) {
+        std::lock_guard<std::mutex> lock(outputLifecycleMutex);
+        auto entry = findOutput(id);
+        if (!entry) {
             setError(
                 ErrorCode::InvalidArgument,
                 "D3D11FrameSyncThread::updateOutput",
                 "Output ID was not found");
             return false;
         }
-        SortOutputTable(*next);
-        storeOutputTable(std::move(next));
+        if (entry->state != FrameSyncOutputState::Active) {
+            setError(
+                ErrorCode::InvalidArgument,
+                "D3D11FrameSyncThread::updateOutput",
+                "A stopped or faulted output cannot be updated; add a new output instead");
+            return false;
+        }
+
+        entry->config = std::move(config);
+        entry->rateGate = RateGate(entry->config.frameRate);
+        SortOutputTable(outputTable);
         clearError();
         return true;
     }
 
-    bool replaceOutputQueue(
-        FrameSyncOutputId id,
-        std::shared_ptr<D3D11ReadOnlyFrameSetQueue> queue)
+    bool stopOutputSupply(FrameSyncOutputId id)
     {
-        if (!queue) {
+        // dispatchCompleteSet() holds this same mutex while performing every
+        // queue push. Acquiring it therefore waits for an older dispatch to
+        // finish and prevents a newer dispatch from observing the output as
+        // active. No late push can occur after this function returns.
+        std::lock_guard<std::mutex> lock(outputLifecycleMutex);
+        auto entry = findOutput(id);
+        if (!entry) {
             setError(
                 ErrorCode::InvalidArgument,
-                "D3D11FrameSyncThread::replaceOutputQueue",
-                "Output queue is null");
-            return false;
-        }
-
-        std::lock_guard<std::mutex> lock(outputUpdateMutex);
-        auto current = loadOutputTable();
-        auto next = std::make_shared<OutputTable>();
-        next->reserve(current->size());
-        bool found = false;
-        for (const auto& entry : *current) {
-            if (entry->id == id) {
-                next->push_back(std::make_shared<OutputEntry>(
-                    entry->id,
-                    entry->registrationOrder,
-                    queue,
-                    entry->config,
-                    entry->counters));
-                found = true;
-            } else {
-                next->push_back(entry);
-            }
-        }
-        if (!found) {
-            setError(
-                ErrorCode::InvalidArgument,
-                "D3D11FrameSyncThread::replaceOutputQueue",
+                "D3D11FrameSyncThread::stopOutputSupply",
                 "Output ID was not found");
             return false;
         }
-        storeOutputTable(std::move(next));
+
+        if (entry->state == FrameSyncOutputState::Active) {
+            entry->state = FrameSyncOutputState::SupplyStopped;
+        }
+        // SupplyStopped and Faulted are both terminal no-supply states.
         clearError();
         return true;
     }
 
-    bool unregisterOutput(FrameSyncOutputId id)
+    bool closeOutputChannel(FrameSyncOutputId id)
     {
-        std::lock_guard<std::mutex> lock(outputUpdateMutex);
-        auto current = loadOutputTable();
-        auto next = std::make_shared<OutputTable>();
-        next->reserve(current->size());
-        bool found = false;
-        for (const auto& entry : *current) {
-            if (entry->id == id) {
-                found = true;
-                continue;
-            }
-            next->push_back(entry);
-        }
-        if (!found) {
+        std::lock_guard<std::mutex> lock(outputLifecycleMutex);
+        auto iterator = std::find_if(
+            outputTable.begin(),
+            outputTable.end(),
+            [id](const auto& entry) { return entry->id == id; });
+        if (iterator == outputTable.end()) {
             setError(
                 ErrorCode::InvalidArgument,
-                "D3D11FrameSyncThread::unregisterOutput",
+                "D3D11FrameSyncThread::closeOutputChannel",
                 "Output ID was not found");
             return false;
         }
-        storeOutputTable(std::move(next));
+        if ((*iterator)->state == FrameSyncOutputState::Active) {
+            setError(
+                ErrorCode::InvalidArgument,
+                "D3D11FrameSyncThread::closeOutputChannel",
+                "Supply must be stopped before the output channel is closed");
+            return false;
+        }
+
+        // BlockingQueue::close() wakes waiters but deliberately leaves queued
+        // frame sets intact. A consumer may drain them, or clear the queue to
+        // discard them. The registry releases its ownership after closing.
+        (*iterator)->queue->close();
+        outputTable.erase(iterator);
         clearError();
         return true;
     }
@@ -383,23 +383,32 @@ public:
     std::optional<FrameSyncOutputConfig> outputConfig(
         FrameSyncOutputId id) const
     {
-        const auto table = loadOutputTable();
-        for (const auto& entry : *table) {
-            if (entry->id == id) return entry->config;
-        }
-        return std::nullopt;
+        std::lock_guard<std::mutex> lock(outputLifecycleMutex);
+        const auto entry = findOutputConst(id);
+        if (!entry) return std::nullopt;
+        return entry->config;
+    }
+
+    std::optional<FrameSyncOutputState> outputState(
+        FrameSyncOutputId id) const
+    {
+        std::lock_guard<std::mutex> lock(outputLifecycleMutex);
+        const auto entry = findOutputConst(id);
+        if (!entry) return std::nullopt;
+        return entry->state;
     }
 
     std::vector<FrameSyncOutputInfo> outputs() const
     {
+        std::lock_guard<std::mutex> lock(outputLifecycleMutex);
         std::vector<FrameSyncOutputInfo> result;
-        const auto table = loadOutputTable();
-        result.reserve(table->size());
-        for (const auto& entry : *table) {
+        result.reserve(outputTable.size());
+        for (const auto& entry : outputTable) {
             result.push_back(FrameSyncOutputInfo{
                 entry->id,
                 entry->config,
-                entry->registrationOrder});
+                entry->registrationOrder,
+                entry->state});
         }
         return result;
     }
@@ -407,11 +416,19 @@ public:
     std::optional<FrameSyncOutputStats> outputStats(
         FrameSyncOutputId id) const
     {
-        const auto table = loadOutputTable();
-        for (const auto& entry : *table) {
-            if (entry->id == id) return entry->counters->snapshot();
-        }
-        return std::nullopt;
+        std::lock_guard<std::mutex> lock(outputLifecycleMutex);
+        const auto entry = findOutputConst(id);
+        if (!entry) return std::nullopt;
+        return entry->counters->snapshot();
+    }
+
+    std::optional<ErrorInfo> outputLastError(
+        FrameSyncOutputId id) const
+    {
+        std::lock_guard<std::mutex> lock(outputLifecycleMutex);
+        const auto entry = findOutputConst(id);
+        if (!entry || !entry->lastError) return std::nullopt;
+        return entry->lastError;
     }
 
     FrameSyncStats stats() const
@@ -430,17 +447,23 @@ public:
     FrameSyncConfig configValue;
 
 private:
-    std::shared_ptr<const OutputTable> loadOutputTable() const
+    std::shared_ptr<OutputEntry> findOutput(FrameSyncOutputId id)
     {
-        return std::atomic_load_explicit(&outputTable, std::memory_order_acquire);
+        const auto iterator = std::find_if(
+            outputTable.begin(),
+            outputTable.end(),
+            [id](const auto& entry) { return entry->id == id; });
+        return iterator == outputTable.end() ? nullptr : *iterator;
     }
 
-    void storeOutputTable(std::shared_ptr<OutputTable> table)
+    std::shared_ptr<const OutputEntry> findOutputConst(
+        FrameSyncOutputId id) const
     {
-        std::atomic_store_explicit(
-            &outputTable,
-            std::shared_ptr<const OutputTable>(std::move(table)),
-            std::memory_order_release);
+        const auto iterator = std::find_if(
+            outputTable.cbegin(),
+            outputTable.cend(),
+            [id](const auto& entry) { return entry->id == id; });
+        return iterator == outputTable.cend() ? nullptr : *iterator;
     }
 
     bool validateOutputConfig(
@@ -491,6 +514,17 @@ private:
     {
         std::lock_guard<std::mutex> lock(errorMutex);
         lastErrorValue = NoError();
+    }
+
+    void faultOutput(
+        OutputEntry& output,
+        const char* where,
+        const std::string& message)
+    {
+        output.state = FrameSyncOutputState::Faulted;
+        output.lastError = MakeError(ErrorCode::ThreadError, where, message);
+        output.counters->dispatchErrors.fetch_add(1, std::memory_order_relaxed);
+        setError(ErrorCode::ThreadError, where, message);
     }
 
     void workerLoop() noexcept
@@ -640,8 +674,12 @@ private:
 
     void dispatchCompleteSet(const CompleteFrameSet& complete)
     {
-        const auto table = loadOutputTable();
-        for (const auto& output : *table) {
+        // This lock linearizes dispatch with add/update/stop/close. A successful
+        // stopOutputSupply() return is therefore a hard no-late-push barrier.
+        std::lock_guard<std::mutex> lock(outputLifecycleMutex);
+        for (const auto& output : outputTable) {
+            if (output->state != FrameSyncOutputState::Active) continue;
+
             output->counters->consideredSets.fetch_add(
                 1,
                 std::memory_order_relaxed);
@@ -658,48 +696,69 @@ private:
                 continue;
             }
 
-            D3D11ReadOnlyFrameSet::FrameList selected;
-            selected.reserve(output->config.requiredCameras.size());
-            for (CameraId cameraId : output->config.requiredCameras) {
-                const auto found = std::find_if(
-                    complete.frames.begin(),
-                    complete.frames.end(),
-                    [cameraId](const auto& indexed) {
-                        return indexed.cameraId == cameraId;
+            try {
+                D3D11ReadOnlyFrameSet::FrameList selected;
+                selected.reserve(output->config.requiredCameras.size());
+                for (CameraId cameraId : output->config.requiredCameras) {
+                    const auto found = std::find_if(
+                        complete.frames.begin(),
+                        complete.frames.end(),
+                        [cameraId](const auto& indexed) {
+                            return indexed.cameraId == cameraId;
+                        });
+                    if (found != complete.frames.end()) selected.push_back(*found);
+                }
+                if (selected.size() != output->config.requiredCameras.size()) {
+                    output->counters->queueDrops.fetch_add(
+                        1,
+                        std::memory_order_relaxed);
+                    incrementStat([](FrameSyncStats& value) {
+                        ++value.totalOutputQueueDrops;
                     });
-                if (found != complete.frames.end()) selected.push_back(*found);
-            }
-            if (selected.size() != output->config.requiredCameras.size()) {
-                output->counters->queueDrops.fetch_add(
-                    1,
-                    std::memory_order_relaxed);
-                incrementStat([](FrameSyncStats& value) {
-                    ++value.totalOutputQueueDrops;
-                });
-                continue;
-            }
+                    continue;
+                }
 
-            auto frameSet = D3D11ReadOnlyFrameSet::Create(
-                complete.syncGroupId,
-                complete.referenceTimestampNs,
-                complete.completedTime,
-                std::move(selected));
-            const auto result = output->queue->push(std::move(frameSet));
-            if (PushSucceeded(result)) {
-                output->counters->emittedSets.fetch_add(
-                    1,
-                    std::memory_order_relaxed);
-                incrementStat([](FrameSyncStats& value) {
-                    ++value.totalOutputSets;
-                });
-            }
-            if (PushDropped(result)) {
-                output->counters->queueDrops.fetch_add(
-                    1,
-                    std::memory_order_relaxed);
-                incrementStat([](FrameSyncStats& value) {
-                    ++value.totalOutputQueueDrops;
-                });
+                auto frameSet = D3D11ReadOnlyFrameSet::Create(
+                    complete.syncGroupId,
+                    complete.referenceTimestampNs,
+                    complete.completedTime,
+                    std::move(selected));
+                const auto result = output->queue->push(std::move(frameSet));
+                if (PushSucceeded(result)) {
+                    output->counters->emittedSets.fetch_add(
+                        1,
+                        std::memory_order_relaxed);
+                    incrementStat([](FrameSyncStats& value) {
+                        ++value.totalOutputSets;
+                    });
+                }
+                if (PushDropped(result)) {
+                    output->counters->queueDrops.fetch_add(
+                        1,
+                        std::memory_order_relaxed);
+                    incrementStat([](FrameSyncStats& value) {
+                        ++value.totalOutputQueueDrops;
+                    });
+                }
+                if (result == ThreadKit::Queues::QueuePushResult::Closed) {
+                    output->counters->closedQueuePushes.fetch_add(
+                        1,
+                        std::memory_order_relaxed);
+                    faultOutput(
+                        *output,
+                        "D3D11FrameSyncThread::dispatchCompleteSet",
+                        "Output queue was closed while supply was active");
+                }
+            } catch (const std::exception& exception) {
+                faultOutput(
+                    *output,
+                    "D3D11FrameSyncThread::dispatchCompleteSet",
+                    exception.what());
+            } catch (...) {
+                faultOutput(
+                    *output,
+                    "D3D11FrameSyncThread::dispatchCompleteSet",
+                    "Unknown output dispatch exception");
             }
         }
     }
@@ -731,8 +790,8 @@ private:
     std::thread worker;
     SyncGroupId nextSyncGroupId = 1;
 
-    mutable std::mutex outputUpdateMutex;
-    std::shared_ptr<const OutputTable> outputTable;
+    mutable std::mutex outputLifecycleMutex;
+    OutputTable outputTable;
     FrameSyncOutputId nextOutputId = 1;
     std::uint64_t nextRegistrationOrder = 1;
 
@@ -770,22 +829,26 @@ bool D3D11FrameSyncThread::updateOutput(
     return impl_->updateOutput(outputId, std::move(config));
 }
 
-bool D3D11FrameSyncThread::replaceOutputQueue(
-    FrameSyncOutputId outputId,
-    std::shared_ptr<D3D11ReadOnlyFrameSetQueue> outputQueue)
+bool D3D11FrameSyncThread::stopOutputSupply(FrameSyncOutputId outputId)
 {
-    return impl_->replaceOutputQueue(outputId, std::move(outputQueue));
+    return impl_->stopOutputSupply(outputId);
 }
 
-bool D3D11FrameSyncThread::unregisterOutput(FrameSyncOutputId outputId)
+bool D3D11FrameSyncThread::closeOutputChannel(FrameSyncOutputId outputId)
 {
-    return impl_->unregisterOutput(outputId);
+    return impl_->closeOutputChannel(outputId);
 }
 
 std::optional<FrameSyncOutputConfig> D3D11FrameSyncThread::outputConfig(
     FrameSyncOutputId outputId) const
 {
     return impl_->outputConfig(outputId);
+}
+
+std::optional<FrameSyncOutputState> D3D11FrameSyncThread::outputState(
+    FrameSyncOutputId outputId) const
+{
+    return impl_->outputState(outputId);
 }
 
 std::vector<FrameSyncOutputInfo> D3D11FrameSyncThread::outputs() const
@@ -797,6 +860,12 @@ std::optional<FrameSyncOutputStats> D3D11FrameSyncThread::outputStats(
     FrameSyncOutputId outputId) const
 {
     return impl_->outputStats(outputId);
+}
+
+std::optional<ErrorInfo> D3D11FrameSyncThread::outputLastError(
+    FrameSyncOutputId outputId) const
+{
+    return impl_->outputLastError(outputId);
 }
 
 const FrameSyncConfig& D3D11FrameSyncThread::config() const noexcept

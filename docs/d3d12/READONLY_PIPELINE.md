@@ -1,20 +1,17 @@
 # IC4Ext 2.0.0 D3D12 ReadOnly Frame Pipeline
 
-この文書は、IC4Ext 2.0.0における正式なD3D12 camera pipelineの設計、所有権、同期、実行時変更、GPU lifetime、readback、検証方法を定義する。
+この文書は、IC4Ext 2.0.0における正式なD3D12 camera pipelineの設計、所有権、同期、実行時output lifecycle、GPU lifetime、readback、検証方法を定義する。
 
 ## 1. Public API
 
-新しいD3D12コードは次をincludeし、`IC4Ext::D3D12`名前空間を使う。
-
 ```cpp
 #include <IC4Ext/D3D12/ReadOnlyPipeline.hpp>
-
 namespace Pipe = IC4Ext::D3D12;
 ```
 
 代表的なpublic type:
 
-```cpp
+```text
 Pipe::CameraCapture
 Pipe::CameraCaptureOptions
 Pipe::ReadResult
@@ -28,17 +25,18 @@ Pipe::PooledFrameConverter
 Pipe::FrameSyncThread
 Pipe::FrameSyncConfig
 Pipe::FrameSyncOutputConfig
+Pipe::FrameSyncOutputState
 Pipe::ReadOnlyFrameLifetimeTracker
 Pipe::ReadOnlyFrameSource
 ```
 
-`V2`は機能名ではないためpublic namespaceとして使用しない。現状、一部の実装本体は物理移動の途中で`include/IC4Ext/V2`または`src/V2`に残っているが、public APIとCMake build entryは`IC4Ext::D3D12`である。
+`V2`は機能名ではないためpublic namespaceとして使用しない。一部の実装本体は物理移動の途中で`include/IC4Ext/V2`または`src/V2`に残るが、public APIとCMake build entryは`IC4Ext::D3D12`である。
 
 ## 2. Compatibility policy
 
 IC4Ext 2.0.0では、旧D3D12 physical-copy fan-out APIとのsource compatibilityを保証しない。
 
-旧D3D12の次の構成は正式経路から外した。
+旧構成:
 
 ```text
 CameraCaptureThread
@@ -46,7 +44,7 @@ CameraCaptureThread
     -> consumer専用textureを毎出力生成
 ```
 
-新構成では、capture/sync層から公開されるframeはReadOnlyのみである。書き込みが必要なconsumerは、自分専用のdestination resourceを確保する。
+正式構成では、capture/sync層から公開されるframeはReadOnlyのみである。書き込みが必要なconsumerは、自分専用のdestination resourceを確保する。
 
 ## 3. Architecture
 
@@ -58,7 +56,7 @@ IC4Ext::D3D12::CameraCapture
   - IC4 device / stream
   - D3D12FrameConverter core
   - UploadRing
-  - per-command-slot reusable input buffer
+  - reusable input buffers
   - producer fence
   - CameraCapture-owned FramePool
         |
@@ -66,17 +64,17 @@ IC4Ext::D3D12::CameraCapture
 ReadOnlyFrame
         |
         v
-CameraCaptureThread
+CameraCaptureThread x N
         |
         v
-IndexedReadOnlyFrameQueue
+one IndexedReadOnlyFrameQueue
         |
         v
-FrameSyncThread
+one FrameSyncThread
   - timestamp-nearest matching
   - complete synchronized set
-  - runtime output snapshot
   - priority / FPS / required camera selection
+  - runtime output lifecycle
         |
         +----> ReadOnlyFrameSetQueue A
         +----> ReadOnlyFrameSetQueue B
@@ -90,15 +88,12 @@ GPU / CPU / recording consumers
 
 ## 4. Ownership model
 
-### 4.1 Producer resource owner
-
 完成frame用D3D12 texture poolは`CameraCapture`が所有する。
 
 ```text
 CameraCapture
   +-- PooledFrameConverter
   |     +-- UploadRing
-  |     +-- command slots
   |     +-- reusable input buffers
   +-- FramePool
         +-- Texture 0
@@ -108,41 +103,15 @@ CameraCapture
 
 `CameraCaptureThread`、`FrameSyncThread`、consumerはpoolそのものを所有しない。
 
-### 4.2 UploadRingとFramePoolの違い
-
-```text
-UploadRing
-  CPU camera bytesをGPUへ転送する一時upload memory。
-  converter command slot側が管理する。
-
-FramePool
-  compute conversion後の完成Texture2Dを保持する。
-  CameraCaptureが所有する。
-```
-
-UploadRing上の領域はproducer command完了後に再利用できる。公開Textureは最後のReadOnly参照とconsumer GPU workが完了するまで再利用できない。
-
-### 4.3 FramePool entry state
-
-概念上の状態遷移:
+概念上のFramePool entry状態:
 
 ```text
 Available
-    |
-    | acquire()
-    v
-Writing
-    |
-    | publish(readyToken, metadata)
-    v
-Published
-    |
-    | 最後のReadOnlyFrame参照が解放
-    v
-Available
+    -> Writing
+    -> Published
+    -> 最後のReadOnly参照とconsumer GPU work完了
+    -> Available
 ```
-
-`FrameWriter`はmove-onlyである。`publish()`後に同じwriterから再度書き込むことはできない。
 
 ## 5. ReadOnlyFrame contract
 
@@ -160,7 +129,7 @@ FrameChunkMetadata
 pool return callback
 ```
 
-consumerに許可する操作:
+許可する操作:
 
 ```text
 SRVとして読む
@@ -182,15 +151,7 @@ metadataを読む
 
 ## 6. Resource-state contract
 
-producerは`FrameWriter`から次を取得する。
-
-```cpp
-writer.initialState();
-writer.writeState();
-writer.publishedState();
-```
-
-基本手順:
+producerは概ね次の順序で公開する。
 
 ```text
 initialState
@@ -202,39 +163,13 @@ initialState
     -> publish()
 ```
 
-camera captureのpublished stateは現在`D3D12_RESOURCE_STATE_GENERIC_READ`である。これはshader-readとcopy-source用途を含むため、複数のReadOnly consumerが元resourceをtransitionせずに読める。
+camera captureのpublished stateは`D3D12_RESOURCE_STATE_GENERIC_READ`である。shader-readとcopy-source用途を含むため、複数ReadOnly consumerが元resourceをtransitionせずに読める。
 
 ## 7. Producer-ready tokenとconsumer lifetime
 
-### 7.1 Producer-ready token
-
-`ReadOnlyFrame::readyToken()`は、producer queueがTextureへの書き込みを完了する時点を表す。
-
-GPU consumerはCPU waitより、consumer queue上のGPU waitを使う。
+producer-ready tokenはTextureへのproducer書き込み完了を表す。consumer GPU処理完了は表さない。
 
 ```cpp
-Pipe::WaitForReadOnlyFrameReadyOnQueue(processingQueue, frame);
-```
-
-### 7.2 Consumer completion
-
-producer-ready tokenは、consumerのGPU読み取り完了を表さない。
-
-危険な例:
-
-```text
-consumer command submit
-    -> CPU側ReadOnlyFrameをすぐ解放
-    -> poolへ返却
-    -> producerが次frameを書き込む
-    -> consumer GPUはまだ旧frameを読んでいる
-```
-
-安全な方法:
-
-```cpp
-Pipe::ReadOnlyFrameLifetimeTracker lifetimeTracker;
-
 Pipe::WaitForReadOnlyFrameReadyOnQueue(processingQueue, frame);
 auto consumerDone = SubmitConsumerWorkAndSignal();
 lifetimeTracker.retainUntil(frame, consumerDone);
@@ -247,9 +182,9 @@ lifetimeTracker.collectCompleted();
 lifetimeTracker.retainUntil(frameSet, consumerDone);
 ```
 
-## 8. FramePool sizing
+consumer GPU commandが読み終える前に入力handleを解放してはならない。
 
-FramePool容量は、同時に生存する共有frame数の上限である。
+## 8. FramePool sizing
 
 必要容量に影響するもの:
 
@@ -262,19 +197,6 @@ GPU completion待ちslot
 readback中のframe
 recording中のframe
 ```
-
-概算の安全側上限:
-
-```text
-required pool capacity
-  >= sync buffer
-   + sum(all-frame queue capacities)
-   + latest pipeline count
-   + active consumer/GPU slots
-   + margin
-```
-
-ただし全outputが同じ完全同期setを共有するため、単純なqueue容量の総和より少ない場合もある。最終値は`FramePoolStats`で確認する。
 
 重要な統計:
 
@@ -293,41 +215,19 @@ waitTimeouts
 
 ## 9. PooledFrameConverter
 
-`PooledFrameConverter`は既存のD3D12 converter coreを使い、FramePoolから取得したoutput textureへ直接書き込む。
-
 ```text
 IC4 CPU bytes
     -> UploadRing
-    -> per-slot default-heap input buffer
+    -> reusable default-heap input buffer
     -> compute shader
     -> FramePool output Texture2D
     -> producer fence
     -> ReadOnlyFrame
 ```
 
-command slotごとにdefault-heap input bufferをcacheする。入力が既存容量以下なら再利用し、大きくなった場合だけ再確保する。
-
-```text
-previous use end: NON_PIXEL_SHADER_RESOURCE
-next use start:   COPY_DEST
-shader input:     NON_PIXEL_SHADER_RESOURCE
-```
-
-統計:
-
-```cpp
-const auto stats = converter.stats();
-
-stats.conversions;
-stats.inputBufferAllocations;
-stats.inputBufferReuses;
-stats.cachedInputBufferCount;
-stats.cachedInputBufferBytes;
-```
+入力bufferはcommand slotごとにcacheし、既存容量以下なら再利用する。
 
 ## 10. CameraCapture
-
-### 10.1 Open
 
 ```cpp
 auto core = D3D12CoreLib::D3D12Core::CreateShared();
@@ -345,28 +245,10 @@ options.initialFramePoolCapacity = 16;
 options.maxFramePoolCapacity = 64;
 
 Pipe::CameraCapture capture;
-if (!capture.open(selector, config, backend, options)) {
-    const auto error = capture.lastError();
-}
+capture.open(selector, config, backend, options);
 ```
 
-### 10.2 Lazy pool creation
-
-FramePoolは最初の実IC4 frameから得たnegotiated width、height、output formatに合わせて初期化する。frame shapeが変更された場合は新しいpoolへ切り替える。
-
-既に公開済みのframeは旧pool stateを共有保持するため、pool切替後も有効である。
-
-### 10.3 Read
-
-```cpp
-auto result = capture.read(IC4Ext::CameraReadOptions{
-    IC4Ext::ReadMode::NextFrame,
-    1000});
-
-if (result) {
-    Pipe::ReadOnlyFrame frame = std::move(result.frame);
-}
-```
+FramePoolは最初の実IC4 frameから得たnegotiated width、height、output formatに合わせて初期化する。frame shape変更時はfuture acquisition用に新しいpoolへ切り替え、既存frameは旧pool stateを共有保持する。
 
 `read()`はGPU conversion完了をCPU waitせずに返す。consumerは`readyToken()`を尊重する。
 
@@ -382,28 +264,7 @@ read(ReadMode::NextFrame)
 
 旧実装のようなper-output fan-outやGPU copyは行わない。
 
-主なAPI:
-
-```cpp
-Pipe::CameraCaptureThread camera(
-    cameraId,
-    selector,
-    config,
-    backend,
-    captureOptions,
-    threadOptions);
-
-camera.setOutputQueue(syncInput);
-camera.start();
-camera.requestStop();
-camera.join();
-```
-
-camera-free testやcustom producer向けに`ReadOnlyFrameSource`を注入できる。
-
 ## 12. FrameSyncThread
-
-### 12.1 One central synchronizer
 
 1つの同期domainにつき、原則1つの`FrameSyncThread`を使う。
 
@@ -411,16 +272,10 @@ camera-free testやcustom producer向けに`ReadOnlyFrameSource`を注入でき�
 CameraCaptureThread x N
     -> one ingress queue
     -> one FrameSyncThread
-    -> runtime output table
+    -> output queues x N
 ```
 
-旧方式のように処理ごとにSyncThreadを作らない。
-
-### 12.2 Timestamp-nearest only
-
-frame-number matchingはサポートしない。ハードウェア同期していても、cameraごとにframe counterのepochや開始値が異なるためである。
-
-設定:
+frame-number matchingはサポートしない。cameraごとにframe counterのepochや開始値が異なり得るため、timestamp-nearestを使う。
 
 ```cpp
 Pipe::FrameSyncConfig syncConfig;
@@ -431,52 +286,24 @@ syncConfig.maxBufferedFramesPerCamera = 16;
 syncConfig.groupTimeout = std::chrono::milliseconds(100);
 ```
 
-各camera buffer先頭のtimestampについて、最大値と最小値の差がtolerance以内なら完全同期setを作る。範囲外なら最古のfront frameをdropする。
-
-### 12.3 Timestamp source
-
-```text
-HostReceived
-  process-wide steady_clockで比較可能。
-  USB転送、OS scheduling、pool stallの影響を受ける。
-
-Device
-  camera device timestampを直接比較する。
-  camera間で同じepoch/clock domainの場合のみ有効。
-
-Auto
-  実装規則に従って利用可能なtimestampを選ぶ。
-```
-
-### 12.4 Tolerance warning
-
-160 fpsのframe periodは6.25 msである。toleranceをframe periodより大きくすると、隣接frameを誤ってpairingする可能性がある。
-
-大きいtoleranceは経路の動作確認には使えるが、pool exhaustionを解消した後に最小安定値へ下げる。
+160 fpsのframe periodは6.25 msである。toleranceをframe periodより大きくすると隣接frameを誤pairingする可能性がある。
 
 ## 13. Complete setとpartial output set
 
-初期実装では、まず全cameraが揃った完全同期setを作る。
+まず全cameraが揃った完全同期setを作り、その後`requiredCameras`に従って参照だけを選ぶ。
 
 ```text
-Complete set: {camera0, camera1, camera2, ...}
-```
-
-その後、各outputの`requiredCameras`に従って参照だけを選ぶ。
-
-```text
-Output A: {0,1}
-Output B: {0}
-Output C: {1,3}
+Complete set: {0,1,2,3}
+Output A:    {0,1}
+Output B:    {0}
+Output C:    {1,3}
 ```
 
 部分set生成でGPU resourceをcopyしない。
 
-全cameraが揃わないsetは、特定outputがそのcameraを必要としなくても配送されない。この制約は初期実装の単純化として受け入れる。
+## 14. Runtime output lifecycle
 
-## 14. Runtime output registry
-
-登録:
+### 14.1 Add
 
 ```cpp
 Pipe::FrameSyncOutputConfig outputConfig;
@@ -488,64 +315,87 @@ outputConfig.enabled = true;
 const auto outputId = sync.registerOutput(queue, outputConfig);
 ```
 
-実行中に変更可能:
+consumerを初期化・開始し、queue待機可能になってから登録する。同じqueue instanceを複数output IDへ登録できない。
+
+### 14.2 Update
 
 ```cpp
 sync.updateOutput(outputId, newConfig);
-sync.replaceOutputQueue(outputId, newQueue);
-sync.unregisterOutput(outputId);
 ```
 
-設定tableはcopy-on-write snapshotとしてpublishする。現在配送中のsetは旧snapshotを使い、次の完全同期setから新設定を使う。
+updateは`Active`状態だけで許可する。queueは不変であり、queue replacement APIは提供しない。置換相当の処理は新outputの追加と旧outputの二段階退役へ分解する。
 
-`unregisterOutput()`後でも、既に配送snapshotへ入った1 setが旧queueへ届く可能性がある。
+### 14.3 Stop supply
 
-## 15. Priority
+```cpp
+sync.stopOutputSupply(outputId);
+```
 
-`priority`が大きいoutputから先に処理する。同priorityでは登録順を維持する。
+成功して戻った時点で、対象outputへのpushは実行中でも今後開始されることもない。dispatchとlifecycle命令を同じmutexで線形化するため、古いsnapshotによるlate pushも残らない。
 
-priorityは次を意味する。
+queueはopenのままであり、既存frame setは保持される。状態は`SupplyStopped`となり、再開はできない。
+
+### 14.4 Drain or discard
+
+使い切る場合:
+
+```cpp
+sync.stopOutputSupply(outputId);
+sync.closeOutputChannel(outputId);
+while (auto set = queue->waitPop()) {
+    Process(*set);
+}
+```
+
+破棄する場合:
+
+```cpp
+sync.stopOutputSupply(outputId);
+queue->clear();
+sync.closeOutputChannel(outputId);
+```
+
+### 14.5 Close channel
+
+```cpp
+sync.closeOutputChannel(outputId);
+```
+
+`SupplyStopped`または`Faulted`でだけ成功する。queueをcloseし、待機consumerをwakeし、`FrameSyncThread`のqueue参照とregistry entryを解放する。queue内要素は自動clearしない。
+
+詳細は`../OUTPUT_LIFECYCLE.md`を参照する。
+
+## 15. Output fault isolation
+
+供給中のqueueが外部からcloseされた場合や、1 outputのdispatchで例外が発生した場合、そのoutputだけを`Faulted`へ移す。中央workerと他outputは継続する。
+
+```cpp
+auto state = sync.outputState(outputId);
+auto stats = sync.outputStats(outputId);
+auto error = sync.outputLastError(outputId);
+```
+
+追加統計:
 
 ```text
-FrameSyncThread内のdispatch順
+dispatchErrors
+closedQueuePushes
 ```
 
-priorityが保証しないもの:
+## 16. PriorityとFPS gate
 
-```text
-OS thread scheduling
-GPU queue scheduling
-consumer処理完了順
-低priority outputの自動省略
-```
-
-## 16. FPS gate
-
-outputごとに次を設定できる。
+`priority`が大きいoutputから先に処理し、同priorityでは登録順を維持する。
 
 ```cpp
 Pipe::FrameRateLimit::Maximum();
 Pipe::FrameRateLimit::Fixed(30.0);
 ```
 
-`FrameSyncThread`はsleepしない。完全同期setのtimestampに基づき、partial set生成前に対象setを選択する。
-
-FPS gateで削減できるもの:
-
-```text
-partial FrameSet allocation
-ReadOnly handle copy
-queue push
-後段consumer処理
-```
-
-captureと完全同期set構築は常に行う。
+FPS gateはpartial set生成、shared handle copy、queue push、後段処理を削減する。captureと完全同期set構築は継続する。
 
 ## 17. Queue policy
 
-中央sync threadはoutput queue pushで長時間blockしてはならない。
-
-### Latest display
+Latest display:
 
 ```text
 capacity       1
@@ -553,9 +403,7 @@ policy         DropOldest
 consumer pop   waitPopLatestFor
 ```
 
-古いframe dropは正常である。
-
-### All-frame processing
+All-frame processing:
 
 ```text
 capacity       bounded
@@ -565,11 +413,7 @@ consumer pop   FIFO
 
 queue full時はそのoutputだけdropとして記録し、他outputとcaptureを継続する。
 
-「すべてのframeを処理する」は、queue dropが0である構成が入力rateへ追従できたことを意味する。無限bufferを意味しない。
-
 ## 18. Readback
-
-`D3D12FrameReadback`はReadOnly専用overloadを持つ。
 
 ```cpp
 IC4Ext::D3D12FrameReadback readback;
@@ -583,56 +427,29 @@ readback.readback(
     5000);
 ```
 
-ReadOnly経路の動作:
-
-```text
-published stateがCOPY_SOURCEを含むことを検証
-consumer queueへproducer fenceのGpuWaitを登録
-元TextureをtransitionせずCopyTextureRegion
-consumer queue completionをCPU wait
-readback bufferからCpuFrameへ変換
-```
-
-複数CPU consumerが同じ`D3D12FrameReadback`を共有してはならない。各consumerは専用queue、command context、readback cacheを持つ。
+複数CPU consumerは専用queue、command context、readback cacheを持つ。
 
 ## 19. Tests
 
-### no-camera / type tests
-
 ```text
 test_d3d12_readonly_pipeline
-```
-
-### Real D3D12 device, no camera
-
-```text
 test_d3d12_pooled_converter_device
-```
-
-検証内容:
-
-```text
-FramePool acquire/publish/release
-real compute conversion
-producer fence
-GPU readback pixel compare
-per-slot input buffer allocation/reuse
-```
-
-### Dummy source integration
-
-```text
 test_d3d12_dummy_capture_sync_integration
+test_d3d12_synthetic_source_sync_integration
+test_d3d12_dynamic_output_lifecycle
 ```
 
-検証経路:
+`test_d3d12_dynamic_output_lifecycle`は常設outputを継続させたまま、動的outputのadd、supply stop、drain/clear、channel closeを200回繰り返す。stop復帰後のlate pushがなく、1 outputのfaultが中央syncや他outputへ波及しないことを確認する。
+
+実camera acceptance:
 
 ```text
-ReadOnlyFrameSource x2
-    -> CameraCaptureThread x2
-    -> FrameSyncThread
-    -> output queue
+test_d3d12_multi_camera_pipeline_e2e
+test_d3d12_hardware_trigger_pipeline_smoke
+test_d3d12_160fps_long_run_acceptance
 ```
+
+2台・1536x1536・hardware trigger・160 fpsの30分試験では287,997同期set、159.998 fps、camera timeout、sync drop、output drop、FramePool exhaustionすべて0を確認した。
 
 ## 20. Samples
 
@@ -642,36 +459,15 @@ MultiCameraReadOnlySyncD3D12
 MultiPipelineStressD3D12
 ```
 
-10-pipeline stress sampleの詳細:
+詳細:
 
 ```text
 samples/MultiPipelineStressD3D12/README.md
 docs/d3d12/VALIDATION_AND_TUNING.md
+docs/d3d12/MULTI_CAMERA_PIPELINE_ACCEPTANCE.md
 ```
 
-## 21. Preliminary validation summary
-
-2026-07-12の予備実測では、10-pipeline構成で次が確認された。
-
-```text
-pool 16/64:
-  pool exhaustionとcapture timeoutが発生
-  synchronized rate 約25 fps
-
-pool 128/256:
-  pool exhaustion 0
-  capture timeout 0
-  sync drop 0
-  synchronized rate 約53.36 fps
-```
-
-この結果は、FramePool sizingがcapture throughputへ直接影響することを示す。
-
-同じ実行でHLSL Sobelは入力rateへ追従したが、OpenCV VideoWriterは約7-17 fpsであり、全フレーム保存には追従しなかった。
-
-## 22. Dependency policy
-
-IC4Ext本体の依存はv1.x系から維持する。
+## 21. Dependency policy
 
 ```text
 D3D11Helper   v1.12.1
@@ -680,19 +476,13 @@ ThreadKit     main
 nlohmann/json v3.11.3
 ```
 
-OpenCVは`MultiPipelineStressD3D12`など一部sampleだけの依存であり、IC4Ext library本体の依存ではない。
+OpenCVは一部sampleだけの依存であり、IC4Ext library本体の依存ではない。
 
-`D3DVideoEncoder`は固定D3D12Helper v1.12.1より新しいhelper headerを要求する場合があるため、現在は既定buildへ組み込んでいない。
+## 22. Remaining work
 
-## 23. Remaining work
-
-1. `include/IC4Ext/V2`と`src/V2`に残る実装本体を、通常のD3D12 pathへ物理移動する。
-2. 2台160 fpsを実際に供給できるcamera/trigger設定を確立する。
-3. large pool状態でtimestamp toleranceを再調整する。
-4. pair timestamp deltaのp50/p95/p99/maxを統計へ追加する。
-5. OpenCV VideoWriterをD3D12 hardware encoderへ置き換える。
-6. IC4 stream statisticsとcamera performance snapshotをstress CSVへ統合する。
-7. runtime output updateを含む長時間stress testを追加する。
-8. device removal、DRED、fence timeoutのfailure pathを試験する。
-9. 10/12/16bit、packed Bayer、YUV/NV12等を必要に応じて追加する。
-10. D3D12-D3D11 interopを必要に応じて実装する。
+1. `include/IC4Ext/V2`と`src/V2`に残る実装本体を通常のD3D12 pathへ物理移動する。
+2. dynamic output lifecycleを実camera 160 fps中にも反復するacceptance testを追加する。
+3. pair timestamp deltaのp50/p95/p99/maxをlibrary統計へ追加する。
+4. device removal、DRED、fence timeoutのfailure pathを試験する。
+5. 10/12/16bit、packed Bayer、YUV/NV12等を必要に応じて追加する。
+6. D3D12-D3D11 interopを必要に応じて実装する。

@@ -57,7 +57,8 @@ IC4 ImageBuffer
 - 1同期domainにつき中央`FrameSyncThread`を1つ使う。
 - frame-number同期は使用せず、timestamp-nearestのみを使う。
 - outputごとにrequired cameras、FPS、priority、enabledを設定できる。
-- outputの登録、更新、queue差替え、削除を実行中に行える。
+- output queueは登録後に置換しない。切替は新outputの追加と旧outputの二段階退役で行う。
+- 削除は`stopOutputSupply()`と`closeOutputChannel()`へ分離する。
 
 ## 4. ReadOnlyFrame
 
@@ -218,13 +219,23 @@ outputConfig.enabled = true;
 auto outputId = sync.registerOutput(queue, outputConfig);
 ```
 
-runtime operations:
+runtime configuration update:
 
 ```cpp
 sync.updateOutput(outputId, updated);
-sync.replaceOutputQueue(outputId, newQueue);
-sync.unregisterOutput(outputId);
 ```
+
+queue replacementとone-step unregisterは提供しない。outputを終了するときは次の二段階を使う。
+
+```cpp
+sync.stopOutputSupply(outputId);  // synchronous no-late-push barrier
+
+// queue backlogをdrainする、またはqueue->clear()で破棄する。
+
+sync.closeOutputChannel(outputId); // queue close + registry release
+```
+
+`stopOutputSupply()`成功後は、そのoutputへのpushが実行中でも今後開始されることもない。queueはまだopenであり、既存frameは保持される。`closeOutputChannel()`はActive状態では失敗し、SupplyStoppedまたはFaulted状態でだけ実行できる。詳細は`../OUTPUT_LIFECYCLE.md`を参照する。
 
 ## 11. Queue policy
 
@@ -292,7 +303,10 @@ CPU/display/video consumerは各自readbackする。OpenCVはsampleだけの依�
 test_d3d11_readonly_pipeline
 test_d3d11_pooled_converter_device
 test_d3d11_synthetic_source_sync_integration
+test_d3d11_dynamic_output_lifecycle
 ```
+
+`test_d3d11_dynamic_output_lifecycle`は、常設outputを動作させたまま動的outputの追加、同期供給停止、drain/clear、channel closeを200回繰り返す。供給停止後のlate pushがなく、1 outputのfaultが中央syncや常設outputへ波及しないことを確認する。
 
 最初はD3D11-onlyでbuildする。
 

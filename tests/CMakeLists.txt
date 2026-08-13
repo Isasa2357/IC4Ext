@@ -67,6 +67,14 @@ if(IC4EXT_ENABLE_D3D11)
         SKIP_RETURN_CODE 77
         TIMEOUT 120)
 
+    ic4ext_add_no_camera_test(
+        test_d3d11_dynamic_output_lifecycle
+        test_d3d11_dynamic_output_lifecycle.cpp)
+    set_tests_properties(test_d3d11_dynamic_output_lifecycle PROPERTIES
+        LABELS "no_camera;d3d11_device;integration;dynamic_output"
+        SKIP_RETURN_CODE 77
+        TIMEOUT 180)
+
     ic4ext_add_camera_test(test_single_camera_smoke camera1 test_single_camera_smoke.cpp)
 
     ic4ext_add_camera_test(test_camera1_readback_integration camera1 test_camera1_readback_integration.cpp)
@@ -174,6 +182,14 @@ if(IC4EXT_ENABLE_D3D12)
         LABELS "no_camera;d3d12_device;integration;synthetic"
         SKIP_RETURN_CODE 77
         TIMEOUT 120)
+
+    ic4ext_add_no_camera_test(
+        test_d3d12_dynamic_output_lifecycle
+        test_d3d12_dynamic_output_lifecycle.cpp)
+    set_tests_properties(test_d3d12_dynamic_output_lifecycle PROPERTIES
+        LABELS "no_camera;d3d12_device;integration;dynamic_output"
+        SKIP_RETURN_CODE 77
+        TIMEOUT 180)
 
     ic4ext_add_no_camera_test(test_d3d12_shader_compile test_d3d12_shader_compile.cpp)
     target_compile_definitions(test_d3d12_shader_compile PRIVATE IC4EXT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/..")
