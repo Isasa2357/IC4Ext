@@ -7,6 +7,13 @@
 
 namespace IC4Ext::D3D11 {
 
+enum class FrameSyncOutputState : std::uint32_t
+{
+    Active = 0,
+    SupplyStopped = 1,
+    Faulted = 2,
+};
+
 struct FrameSyncOutputConfig
 {
     std::vector<CameraId> requiredCameras;
@@ -20,6 +27,7 @@ struct FrameSyncOutputInfo
     FrameSyncOutputId id = InvalidFrameSyncOutputId;
     FrameSyncOutputConfig config;
     std::uint64_t registrationOrder = 0;
+    FrameSyncOutputState state = FrameSyncOutputState::Active;
 };
 
 struct FrameSyncOutputStats
@@ -29,6 +37,8 @@ struct FrameSyncOutputStats
     std::uint64_t emittedSets = 0;
     std::uint64_t queueDrops = 0;
     std::uint64_t disabledSkips = 0;
+    std::uint64_t dispatchErrors = 0;
+    std::uint64_t closedQueuePushes = 0;
 };
 
 } // namespace IC4Ext::D3D11

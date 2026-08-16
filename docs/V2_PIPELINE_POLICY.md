@@ -77,8 +77,11 @@ read(ReadMode::NextFrame)
 - outputごとの`requiredCameras`選択
 - outputごとのFPS gate
 - priority順のdispatch
-- output queueの登録、更新、差替え、削除
+- output queueの追加と設定更新
+- output供給の同期停止
+- output channelのcloseとregistry解放
 - queue pushとdrop統計
+- 1 outputのfaultを他outputから分離
 
 `FrameSyncThread`は次を行わない。
 
@@ -89,6 +92,8 @@ read(ReadMode::NextFrame)
 - format conversion
 - blur、remap、推論前処理などのpost-process
 - outputごとのGPU texture生成
+- output queueの置換
+- one-step unregister
 
 ### 2.4 Consumer
 
@@ -104,6 +109,8 @@ shared ReadOnlyFrame
     -> consumer-owned destination Texture / output pool
     -> next consumer-specific stage
 ```
+
+consumerはoutput供給停止後に、queueへ既に入っているframeを使い切るか、`clear()`して破棄するかを選ぶ。
 
 ## 3. Copyと共有所有権
 
@@ -184,11 +191,30 @@ struct FrameSyncOutputConfig
 - `requiredCameras`: outputへ含めるcamera参照
 - `frameRate`: `Maximum()`または`Fixed(fps)`による配送頻度
 - `priority`: `FrameSyncThread`内のdispatch順
-- `enabled`: output配送の有効・無効
+- `enabled`: output配送の一時的な有効・無効
+
+`enabled=false`はterminalな削除命令ではない。consumerやresourceを破棄するときは、必ず`stopOutputSupply()`の同期barrierを使用する。
 
 resize size、resize filter、output format、processing shaderなどの画像処理設定は追加しない。これらはconsumer固有の設定として管理する。
 
-## 7. FPS gate
+## 7. Output lifecycle
+
+output IDとqueueの対応は登録後に不変とする。置換相当の処理も次の組合せへ分解する。
+
+```text
+新outputをregisterOutput
+旧outputをstopOutputSupply
+旧queue backlogをdrainまたはclear
+旧outputをcloseOutputChannel
+```
+
+`stopOutputSupply()`が成功して戻った後は、対象outputへのpushが実行中でも今後開始されることもない。queueはcloseされず、既存frameは保持される。
+
+`closeOutputChannel()`は`SupplyStopped`または`Faulted`のoutputにだけ使用できる。queueをcloseして待機consumerを起こし、`FrameSyncThread`のqueue参照とregistry entryを解放する。queueの中身は自動clearしない。
+
+詳細は`OUTPUT_LIFECYCLE.md`を参照する。
+
+## 8. FPS gate
 
 outputごとのFPS制限は`FrameSyncThread`の配送gateである。
 
@@ -201,7 +227,7 @@ FPS gateは次を削減する。
 
 一方、camera captureと完全同期setの構築は常に継続する。`FrameSyncThread`はFPS制限のためにcamera readを停止したり、sleepによってcapture rateを制御したりしない。
 
-## 8. IC4Ext本体の非責務
+## 9. IC4Ext本体の非責務
 
 次はIC4Ext v2のcapture/sync pipelineには含めない。
 
@@ -215,7 +241,7 @@ FPS gateは次を削減する。
 
 sampleがOpenCVやvideo encoderを使用する場合、それらはconsumer workloadの例であり、IC4Ext本体のpipeline責務を拡張するものではない。
 
-## 9. 実装レビュー時の確認事項
+## 10. 実装レビュー時の確認事項
 
 v2 pipelineへ変更を加える際は、少なくとも次を確認する。
 
@@ -226,3 +252,6 @@ v2 pipelineへ変更を加える際は、少なくとも次を確認する。
 - consumer GPU completionまで入力frameのlifetimeを保持できるか。
 - `FrameSyncOutputConfig`が配送設定に限定されているか。
 - resizeなどの出力resource所有者がconsumer側になっているか。
+- output queueを置換せず、add + two-stage retirementを使っているか。
+- `stopOutputSupply()`復帰後のlate pushが存在しないか。
+- 1 outputのfaultで中央syncや他outputを停止させていないか。

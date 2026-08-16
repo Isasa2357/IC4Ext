@@ -10,32 +10,36 @@ IC4Ext 2.0.0では、D3D11とD3D12の両backendでReadOnly frame pipelineを正�
 
 1. `d3d11/READONLY_PIPELINE.md`  
    D3D11 ReadOnly pipeline、IC4 bytesからFramePoolへのdirect compute変換、immediate-context同期、中央timestamp sync、runtime output、readbackを定義する。
-2. `d3d11/SYNTHETIC_FRAME_SOURCE.md`  
+2. `OUTPUT_LIFECYCLE.md`  
+   runtime outputの追加、同期的な供給停止、queue close、drain/clear、障害分離を定義する。
+3. `d3d11/SYNTHETIC_FRAME_SOURCE.md`  
    実cameraなしで任意size・fps・timestamp offsetのRGBA8 D3D11 frameを生成し、capture-thread/sync/readback経路を検証する。
-3. `../samples/MultiPipelineStressD3D11/README.md`  
+4. `../samples/MultiPipelineStressD3D11/README.md`  
    実cameraまたはsynthetic sourceで10処理を同時実行するstress sampleのbuild、実行、合否条件。
-4. `design/03_D3D11Backend.md`  
+5. `design/03_D3D11Backend.md`  
    D3D11 backendとlegacy APIの背景資料。
-5. `design/13_ReadbackAndCpuFrame.md`  
+6. `design/13_ReadbackAndCpuFrame.md`  
    CPU readbackとCpuFrameの共通仕様。
 
 ### D3D12 ReadOnly pipelineを利用・実装する場合
 
 1. `d3d12/READONLY_PIPELINE.md`  
    D3D12 ReadOnly pipelineの正式設計。所有権、FramePool、同期、runtime output、GPU lifetime、readbackを定義する。
-2. `d3d12/VALIDATION_AND_TUNING.md`  
+2. `OUTPUT_LIFECYCLE.md`  
+   queue replacementを使わないadd + two-stage retirementと、stop後のdrain/clearを定義する。
+3. `d3d12/VALIDATION_AND_TUNING.md`  
    pool sizing、timestamp tolerance、10-pipeline stress、実測値、合否判定、10分soak手順。
-3. `d3d12/SYNTHETIC_FRAME_SOURCE.md`  
+4. `d3d12/SYNTHETIC_FRAME_SOURCE.md`  
    実カメラなしで任意サイズ・fps・timestamp offsetのRGBA ReadOnlyFrameをGPU生成し、capture-thread/sync/readback経路を検証する方法。
-4. `../samples/MultiPipelineStressD3D12/README.md`  
+5. `../samples/MultiPipelineStressD3D12/README.md`  
    10処理同時sampleのbuild、OpenCV設定、実行command、出力の読み方。
-5. `design/10_D3D12Backend.md`  
+6. `design/10_D3D12Backend.md`  
    D3D12Helper統合、resource/queue/fenceの責務。
-6. `design/12_D3D12FrameSyncThread.md`  
+7. `design/12_D3D12FrameSyncThread.md`  
    timestamp-nearest、完全同期set、runtime output registry。
-7. `design/13_ReadbackAndCpuFrame.md`  
+8. `design/13_ReadbackAndCpuFrame.md`  
    ReadOnlyFrameからのreadbackとconsumer分離。
-8. `design/14_CurrentStatusAndRoadmap.md`  
+9. `design/14_CurrentStatusAndRoadmap.md`  
    実装済み機能、予備検証結果、残作業。
 
 ### ライブラリ全体を読む場合
@@ -45,7 +49,8 @@ IC4Ext 2.0.0では、D3D11とD3D12の両backendでReadOnly frame pipelineを正�
 3. `design/02_IC4DeviceAndStream.md`
 4. `design/04_FormatConversion.md`
 5. `design/08_BuildAndSampleTest.md`
-6. backend別ReadOnly文書
+6. `OUTPUT_LIFECYCLE.md`
+7. backend別ReadOnly文書
 
 ## 設計ドキュメント一覧
 
@@ -67,6 +72,7 @@ IC4Ext 2.0.0では、D3D11とD3D12の両backendでReadOnly frame pipelineを正�
 | `design/13_ReadbackAndCpuFrame.md` | CPU readback | current |
 | `design/14_CurrentStatusAndRoadmap.md` | 実装状態、検証、TODO | current |
 | `design/15_DXCRuntime.md` | DXC runtime自動取得・配置 | current |
+| `OUTPUT_LIFECYCLE.md` | runtime outputのadd / supply stop / channel close | authoritative |
 | `d3d11/READONLY_PIPELINE.md` | D3D11 ReadOnly architecture | authoritative |
 | `d3d11/SYNTHETIC_FRAME_SOURCE.md` | D3D11 camera-free GPU source | authoritative |
 | `d3d12/READONLY_PIPELINE.md` | D3D12正式アーキテクチャ | authoritative |
@@ -81,7 +87,8 @@ IC4Ext 2.0.0では、D3D11とD3D12の両backendでReadOnly frame pipelineを正�
 - D3D12 public namespace: `IC4Ext::D3D12`
 - D3D12 public include: `<IC4Ext/D3D12/ReadOnlyPipeline.hpp>`
 - 旧physical-copy fan-out APIとのsource compatibilityは保証しない。
+- output queue replacementとone-step unregisterは提供しない。add + `stopOutputSupply()` + `closeOutputChannel()`を使う。
 
 ## 過去資料
 
-`IC4Ext_SelfContainedDesign_v1_3_FULL.md`など、v1.xを前提とする統合仕様メモは履歴資料である。2.0.0の実装判断にはbackend別`READONLY_PIPELINE.md`を優先する。
+`IC4Ext_SelfContainedDesign_v1_3_FULL.md`など、v1.xを前提とする統合仕様メモは履歴資料である。2.0.0の実装判断にはbackend別`READONLY_PIPELINE.md`と`OUTPUT_LIFECYCLE.md`を優先する。
