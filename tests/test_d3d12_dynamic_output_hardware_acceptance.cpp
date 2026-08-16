@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdint>
 #include <exception>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <memory>
@@ -815,15 +816,13 @@ int main()
                 std::chrono::duration<double>(churnEnd - churnStart).count();
             const auto permanentMeasuredSets =
                 Delta(finalPermanentSets, baselinePermanentSets);
-            if (!ValidateFinalStats(
-                    settings,
-                    baseline,
-                    finalStats,
-                    permanentMeasuredSets,
-                    elapsedSeconds,
-                    failure)) {
-                // failure populated by ValidateFinalStats
-            }
+            ValidateFinalStats(
+                settings,
+                baseline,
+                finalStats,
+                permanentMeasuredSets,
+                elapsedSeconds,
+                failure);
         }
     }
 
