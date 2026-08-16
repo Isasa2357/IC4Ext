@@ -159,6 +159,14 @@ if(IC4EXT_ENABLE_D3D12)
             TIMEOUT 7200
             WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
 
+    ic4ext_add_camera_test(
+        test_d3d12_dynamic_output_hardware_acceptance
+        "camera2;integration;v2;hardware_trigger;manual;dynamic_output;acceptance"
+        test_d3d12_dynamic_output_hardware_acceptance.cpp)
+    set_tests_properties(
+        test_d3d12_dynamic_output_hardware_acceptance
+        PROPERTIES TIMEOUT 600)
+
     ic4ext_add_no_camera_test(
         test_d3d12_pooled_converter_device
         test_d3d12_pooled_converter_device.cpp)
