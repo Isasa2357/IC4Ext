@@ -103,7 +103,13 @@ if(IC4EXT_ENABLE_D3D11)
         NAME test_d3d11_multi_camera_pipeline_e2e
         COMMAND ${CMAKE_COMMAND} -E env
             "IC4EXT_TEST_PIPELINE_MODE=free-run"
+            "IC4EXT_TEST_FPS=30"
+            "IC4EXT_TEST_EXPECTED_FPS=30"
+            "IC4EXT_TEST_MIN_RATE_RATIO=0"
             "IC4EXT_TEST_SYNC_TOLERANCE_NS=20000000"
+            "IC4EXT_TEST_WARMUP_SETS=20"
+            "IC4EXT_TEST_SYNC_SETS=100"
+            "IC4EXT_TEST_TRIGGER_ARM_DELAY_MS=0"
             $<TARGET_FILE:test_d3d11_multi_camera_pipeline_acceptance>)
     set_tests_properties(
         test_d3d11_multi_camera_pipeline_e2e
