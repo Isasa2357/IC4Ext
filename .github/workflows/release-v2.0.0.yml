@@ -1,0 +1,98 @@
+name: Release v2.0.0
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/release-v2.0.0.yml
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      TARGET_SHA: 6d94bf6bd39346554d02023b57da984394e7d5b3
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate release target
+        shell: bash
+        run: |
+          set -euo pipefail
+          git cat-file -e "${TARGET_SHA}^{commit}"
+          test "$(git show "${TARGET_SHA}:VERSION")" = "2.0.0"
+
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cat > release-notes.md <<'EOF'
+          # IC4Ext v2.0.0
+
+          IC4Ext v2.0.0 establishes the shared ReadOnly GPU-frame pipeline as the supported architecture for both D3D11 and D3D12.
+
+          ## Highlights
+
+          - D3D11 and D3D12 ReadOnly camera capture pipelines.
+          - One shared ingress queue and one central timestamp-nearest `FrameSyncThread` for multi-camera synchronization.
+          - Shared fan-out without per-output GPU texture copies.
+          - Runtime output add/update plus two-stage retirement with `stopOutputSupply()` and `closeOutputChannel()`.
+          - Strong no-late-push guarantee after `stopOutputSupply()` returns.
+          - Per-output fault isolation so one failed/closed output does not stop the central sync worker or other outputs.
+          - Consumer-owned post-processing/resources and explicit GPU lifetime tracking.
+          - Multi-camera startup helper with deterministic device selection (`serial -> uniqueName -> deviceIndex -> first device`).
+          - Camera-free synthetic source integration and dynamic-output lifecycle tests.
+          - Legacy top-level `include/IC4Ext/V2` and `src/V2` source paths removed from the active source layout.
+
+          ## Hardware validation
+
+          D3D11 and D3D12 were both validated with two physical cameras at 1536x1536, BayerRG8, 160 Hz hardware trigger for 30 minutes.
+
+          - D3D11: 287,997 synchronized sets in 1800.000 s, 159.998 fps.
+          - D3D12: 287,997 synchronized sets in 1800.001 s, 159.998 fps.
+          - Camera timeouts: 0 / 0.
+          - Sync drops: 0.
+          - Output queue drops: 0.
+          - FramePool exhaustion: 0 / 0.
+          - D3D12 dynamic-output hardware churn: 200 add/stop/close cycles at 160 fps with 0 late pushes and no interruption to the permanent output.
+
+          ## Supported camera input formats
+
+          - Mono8
+          - BayerRG8 / BayerGR8 / BayerGB8 / BayerBG8
+          - BGR8
+          - BGRa8
+
+          GPU output formats are R8 and RGBA8.
+
+          ## Not supported in v2.0.0
+
+          - 10/12/16-bit camera formats.
+          - Packed pixel formats such as Mono10p/Mono12p/Bayer10p/Bayer12p.
+          - v1 physical-copy fan-out source compatibility.
+
+          These formats are intentionally left out of v2.0.0 rather than expanding the conversion surface after the validated release candidate.
+
+          ## Requirements
+
+          - Windows 10/11
+          - C++17 / Visual Studio 2022-compatible MSVC
+          - CMake 3.21+
+          - The Imaging Source IC Imaging Control 4 SDK
+          - D3D11.4 and/or D3D12-capable hardware, depending on the selected backend
+
+          Release target: `6d94bf6bd39346554d02023b57da984394e7d5b3`.
+          EOF
+
+          gh release create v2.0.0 \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$TARGET_SHA" \
+            --title "IC4Ext v2.0.0" \
+            --notes-file release-notes.md
