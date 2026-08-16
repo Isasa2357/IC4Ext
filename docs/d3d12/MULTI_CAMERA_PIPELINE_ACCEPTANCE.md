@@ -15,6 +15,8 @@ OpenAndStartMultiCameraGroup
 
 このテストではdirect `CameraCapture`を返さない。2台とも`CameraCaptureThread`として起動し、同じingress queueへshared `ReadOnlyFrame`を提出する。`FrameSyncThread`は完全同期setを作り、同じGPU textureへのReadOnly handleをoutput queueへ渡す。
 
+動的outputのadd / `stopOutputSupply()` / drain-or-clear / `closeOutputChannel()`を160 fps中に反復する実機試験は、`DYNAMIC_OUTPUT_ACCEPTANCE.md`を参照する。
+
 ## 1. テストターゲット
 
 ビルド対象:
@@ -32,6 +34,14 @@ test_d3d12_160fps_long_run_acceptance
 ```
 
 `hardware_trigger`と`long_run`は外部機器を必要とするmanual testである。明示的なenable環境変数がなければreturn code 77でskipする。
+
+動的output用の独立ターゲット:
+
+```text
+test_d3d12_dynamic_output_hardware_acceptance
+```
+
+こちらもmanual testであり、`IC4EXT_TEST_ENABLE_DYNAMIC_OUTPUT_ACCEPTANCE=1`が必要である。
 
 ## 2. 共通ビルド
 
@@ -210,9 +220,25 @@ ctest --test-dir out\build\v2_pipeline_acceptance ^
 
 カメラ固有の160 fps設定にIC Capture JSONが必要な場合は、`IC4EXT_TEST_IC4_JSON_0`と`IC4EXT_TEST_IC4_JSON_1`を設定する。明示的なWidth、Height、PixelFormat、FPSはJSON適用後のtest設定と整合させる。
 
-## 6. Acceptance criteria
+## 6. Dynamic output hardware acceptance
 
-全modeで次を要求する。
+固定outputの長時間試験とは別に、常設output Aを動作させたまま動的output Bを繰り返し追加・停止・closeする。
+
+```text
+register B
+stop timingを0 / 1 / 2 / 4 queued setsで変化
+stopOutputSupply B
+Aをさらに数set流す
+Bへのlate pushがないことを確認
+drainまたはclear
+closeOutputChannel B
+```
+
+標準は200 cycleである。詳細なコマンドと合格条件は`DYNAMIC_OUTPUT_ACCEPTANCE.md`を参照する。
+
+## 7. Acceptance criteria
+
+固定outputの全modeで次を要求する。
 
 ```text
 startup result contains 0 direct captures and exactly 2 running capture threads
@@ -244,7 +270,7 @@ camera read-count imbalance <= 1%
 
 warmup完了時のstatsをbaselineとし、外部trigger開始前やstartup中のtimeout/dropはlong-run measured intervalへ含めない。
 
-## 7. 主な環境変数
+## 8. 主な環境変数
 
 | Variable | Meaning | Default |
 |---|---|---:|
@@ -265,10 +291,12 @@ warmup完了時のstatsをbaselineとし、外部trigger開始前やstartup中�
 | `IC4EXT_TEST_FRAME_POOL_MAX` | producer FramePool最大容量 | 256 |
 | `IC4EXT_TEST_ENABLE_HW_ACCEPTANCE` | hardware smokeを有効化 | 0 |
 | `IC4EXT_TEST_ENABLE_LONG_RUN_ACCEPTANCE` | long-runを有効化 | 0 |
+| `IC4EXT_TEST_ENABLE_DYNAMIC_OUTPUT_ACCEPTANCE` | dynamic output実機試験を有効化 | 0 |
+| `IC4EXT_TEST_DYNAMIC_OUTPUT_CYCLES` | add/stop/close反復回数 | 200 |
 
-## 8. 結果出力
+## 9. 結果出力
 
-成功時には次の形式でsummaryを出す。
+固定output成功時には次の形式でsummaryを出す。
 
 ```text
 [v2-acceptance-result] mode=long-run-160fps sets=... elapsedSec=... syncFps=... expectedFps=160.000 minRateRatio=0.950 maxPairDiffUs=... meanPairDiffUs=... camera0Read=... camera1Read=... camera0Timeouts=0 camera1Timeouts=0 syncInput=... syncDropped=... syncIncomplete=... outputDrops=0 pool0Exhaustion=0 pool1Exhaustion=0
