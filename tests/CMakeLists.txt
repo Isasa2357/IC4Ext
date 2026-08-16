@@ -1,5 +1,18 @@
+function(ic4ext_enable_test_assertions name)
+    # Several integration tests intentionally use assert(expr) as their
+    # executable check. Release flags define NDEBUG by default, which would
+    # otherwise remove both the assertion and expr itself. Undefine NDEBUG for
+    # every test target so Release acceptance runs cannot silently become no-op.
+    if(MSVC)
+        target_compile_options(${name} PRIVATE /UNDEBUG)
+    else()
+        target_compile_options(${name} PRIVATE -UNDEBUG)
+    endif()
+endfunction()
+
 function(ic4ext_add_no_camera_test name)
     add_executable(${name} ${ARGN})
+    ic4ext_enable_test_assertions(${name})
     target_link_libraries(${name} PRIVATE IC4Ext::IC4Ext)
     ic4ext_copy_dxc_runtime_to_target(${name})
     add_test(NAME ${name} COMMAND ${name})
@@ -10,6 +23,7 @@ endfunction()
 
 function(ic4ext_add_camera_test name label)
     add_executable(${name} ${ARGN})
+    ic4ext_enable_test_assertions(${name})
     target_link_libraries(${name} PRIVATE IC4Ext::IC4Ext)
     ic4ext_copy_dxc_runtime_to_target(${name})
     add_test(NAME ${name} COMMAND ${name})
@@ -107,6 +121,7 @@ if(IC4EXT_ENABLE_D3D12)
     add_executable(
         test_d3d12_multi_camera_pipeline_acceptance
         test_d3d12_multi_camera_pipeline_acceptance.cpp)
+    ic4ext_enable_test_assertions(test_d3d12_multi_camera_pipeline_acceptance)
     target_link_libraries(
         test_d3d12_multi_camera_pipeline_acceptance
         PRIVATE IC4Ext::IC4Ext)
