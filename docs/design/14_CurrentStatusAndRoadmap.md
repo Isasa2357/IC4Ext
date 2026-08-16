@@ -156,6 +156,9 @@ test_d3d11_multi_camera_startup
 test_d3d11_pooled_converter_device
 test_d3d11_synthetic_source_sync_integration
 test_d3d11_dynamic_output_lifecycle
+test_d3d11_multi_camera_pipeline_e2e
+test_d3d11_hardware_trigger_pipeline_smoke
+test_d3d11_160fps_long_run_acceptance
 test_single_camera_smoke
 test_camera1_readback_integration
 test_camera1_long_run_stress
@@ -187,6 +190,28 @@ Dynamic output lifecycle testは、常設output Aを動作させたまま動的o
 
 D3D11/D3D12のmixed direct/threaded startup helperを2台実機で確認した。D3D12ではserial選択、未知serialのdeviceIndex fallback拒否、direct/threaded frame deliveryも確認した。
 
+### D3D11 v2 fixed-output acceptance
+
+```text
+cameras                 2
+resolution              1536 x 1536
+trigger                 hardware, Line1
+expected rate           160 fps
+measurement             1800 s
+synchronized sets       287,997
+observed rate           159.998 fps
+camera timeouts         0 / 0
+sync drops              0
+incomplete sets         0
+output queue drops      0
+output dispatch errors  0
+FramePool exhaustion    0 / 0
+maximum host pair diff  3.7468 ms
+mean host pair diff     23.416 us
+```
+
+30 fps free-runも1000 synchronized sets、30.035 fps、camera timeout/drop/error/pool exhaustionすべて0で通過した。
+
 ### D3D12 v2 fixed-output acceptance
 
 ```text
@@ -205,7 +230,7 @@ FramePool exhaustion    0 / 0
 maximum host pair diff  3.5564 ms
 ```
 
-これは固定output構成の定常安定性を確認する。dynamic output lifecycleの実camera反復は未検証である。
+D3D12 dynamic output lifecycleは160 fps実機で200 cycleのadd/stop/closeを行い、late push 0、permanent output drop 0、FramePool exhaustion 0を確認した。
 
 ## 8. Output lifecycle policy
 
@@ -238,7 +263,7 @@ resource destroy
 
 ### D3D11 immediate context
 
-安全性のためmulti-call transactionを直列化している。必要になった場合はdeferred context + command-list submissionを次段階の最適化として検討する。
+安全性のためmulti-call transactionを直列化している。実機2台・1536x1536・160 fpsではこの直列化を含む現構成で30分間159.998 fpsを維持した。必要になった場合のみdeferred context + command-list submissionを次段階の最適化として検討する。
 
 ## 10. Not implemented / incomplete
 
@@ -285,14 +310,10 @@ D3D12-D3D11 shared resource interop
 ## 11. Recommended next steps
 
 ```text
-1. Windows/MSVCでD3D11/D3D12 dynamic output lifecycle testをbuild/run
-2. fixed-output regression testsを再実行
-3. D3D12実camera 160 fps中にdynamic output add/stop/closeを反復
-4. D3D11実cameraでpool/timestamp tuningとlong-run acceptance
-5. D3D12 implementation bodyをV2 pathから物理移動
-6. pair timestamp delta diagnostics追加
-7. device removal / timeout failure tests
-8. 必要に応じてformat/interop拡張
+1. D3D12 implementation bodyをV2 pathから物理移動
+2. pair timestamp delta diagnostics追加
+3. device removal / timeout failure tests
+4. 必要に応じてformat/interop拡張
 ```
 
 ## 12. Authoritative documents
@@ -302,6 +323,7 @@ docs/OUTPUT_LIFECYCLE.md
 docs/V2_PIPELINE_POLICY.md
 docs/d3d11/READONLY_PIPELINE.md
 docs/d3d11/SYNTHETIC_FRAME_SOURCE.md
+docs/d3d11/MULTI_CAMERA_PIPELINE_ACCEPTANCE.md
 samples/MultiPipelineStressD3D11/README.md
 docs/d3d12/READONLY_PIPELINE.md
 docs/d3d12/VALIDATION_AND_TUNING.md
