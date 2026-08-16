@@ -89,6 +89,68 @@ if(IC4EXT_ENABLE_D3D11)
         SKIP_RETURN_CODE 77
         TIMEOUT 180)
 
+    add_executable(
+        test_d3d11_multi_camera_pipeline_acceptance
+        test_d3d11_multi_camera_pipeline_acceptance.cpp)
+    ic4ext_enable_test_assertions(test_d3d11_multi_camera_pipeline_acceptance)
+    target_link_libraries(
+        test_d3d11_multi_camera_pipeline_acceptance
+        PRIVATE IC4Ext::IC4Ext)
+    ic4ext_copy_dxc_runtime_to_target(
+        test_d3d11_multi_camera_pipeline_acceptance)
+
+    add_test(
+        NAME test_d3d11_multi_camera_pipeline_e2e
+        COMMAND ${CMAKE_COMMAND} -E env
+            "IC4EXT_TEST_PIPELINE_MODE=free-run"
+            "IC4EXT_TEST_FPS=30"
+            "IC4EXT_TEST_EXPECTED_FPS=30"
+            "IC4EXT_TEST_MIN_RATE_RATIO=0"
+            "IC4EXT_TEST_SYNC_TOLERANCE_NS=20000000"
+            "IC4EXT_TEST_WARMUP_SETS=20"
+            "IC4EXT_TEST_SYNC_SETS=100"
+            "IC4EXT_TEST_TRIGGER_ARM_DELAY_MS=0"
+            $<TARGET_FILE:test_d3d11_multi_camera_pipeline_acceptance>)
+    set_tests_properties(
+        test_d3d11_multi_camera_pipeline_e2e
+        PROPERTIES
+            LABELS "camera2;integration;v2;d3d11"
+            SKIP_RETURN_CODE 77
+            RESOURCE_LOCK "ic4_camera"
+            RUN_SERIAL TRUE
+            TIMEOUT 180
+            WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
+
+    add_test(
+        NAME test_d3d11_hardware_trigger_pipeline_smoke
+        COMMAND ${CMAKE_COMMAND} -E env
+            "IC4EXT_TEST_PIPELINE_MODE=hardware-trigger"
+            $<TARGET_FILE:test_d3d11_multi_camera_pipeline_acceptance>)
+    set_tests_properties(
+        test_d3d11_hardware_trigger_pipeline_smoke
+        PROPERTIES
+            LABELS "camera2;integration;v2;d3d11;hardware_trigger;manual"
+            SKIP_RETURN_CODE 77
+            RESOURCE_LOCK "ic4_camera"
+            RUN_SERIAL TRUE
+            TIMEOUT 600
+            WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
+
+    add_test(
+        NAME test_d3d11_160fps_long_run_acceptance
+        COMMAND ${CMAKE_COMMAND} -E env
+            "IC4EXT_TEST_PIPELINE_MODE=long-run-160fps"
+            $<TARGET_FILE:test_d3d11_multi_camera_pipeline_acceptance>)
+    set_tests_properties(
+        test_d3d11_160fps_long_run_acceptance
+        PROPERTIES
+            LABELS "camera2;integration;v2;d3d11;hardware_trigger;manual;long_run;acceptance"
+            SKIP_RETURN_CODE 77
+            RESOURCE_LOCK "ic4_camera"
+            RUN_SERIAL TRUE
+            TIMEOUT 7200
+            WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
+
     ic4ext_add_camera_test(test_single_camera_smoke camera1 test_single_camera_smoke.cpp)
 
     ic4ext_add_camera_test(test_camera1_readback_integration camera1 test_camera1_readback_integration.cpp)
