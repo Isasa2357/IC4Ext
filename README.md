@@ -74,7 +74,7 @@ resizeやその他の画像処理が必要なconsumerは、入力TextureをReadO
 
 v1 physical-copy fan-out APIとのsource compatibilityは保証しない。新規コードは`IC4Ext::D3D11`または`IC4Ext::D3D12`のReadOnly APIを使う。
 
-D3D12実装の一部は物理移動途中で`include/IC4Ext/V2` / `src/V2`に残るが、public APIとCMake build entryではない。
+D3D12のpublic headerと通常build pathは`include/IC4Ext/D3D12` / `src/D3D12`配下に整理済みであり、source tree top-levelの`include/IC4Ext/V2` / `src/V2`は使用しない。3つの現役実装bodyは`src/D3D12/Detail`へ置き、旧internal include名だけをprivate forwarding headerで吸収する。
 
 ## 3. Current implementation status
 
