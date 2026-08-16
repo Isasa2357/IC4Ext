@@ -442,6 +442,13 @@ void D3D12CameraCaptureThread::workerLoop()
 
 void D3D12CameraCaptureThread::dispatchFrame(D3D12CameraFrame&& frame)
 {
+    // Serialize queue retirement with the complete dispatch, not merely with
+    // the output-list snapshot. removeOutputQueue()/clearOutputQueues() take
+    // the same mutex, so once either returns there can be no late push to a
+    // retired queue and no copied D3D12 frame from that dispatch can outlive
+    // the caller's queue-close transition.
+    std::lock_guard<std::mutex> dispatchLock(dispatchMutex_);
+
     std::vector<OutputBinding> outputs;
     {
         std::lock_guard<std::mutex> lock(outputMutex_);
