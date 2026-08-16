@@ -110,6 +110,8 @@ closeOutputChannel
 
 output IDとqueueの対応は不変であり、置換は新outputの追加と旧outputの二段階退役へ分解する。
 
+D3D12 source treeは通常pathへ整理済みである。public headerは`include/IC4Ext/D3D12`、translation unitと実装detailは`src/D3D12`に置く。top-level `include/IC4Ext/V2` / `src/V2`は使用しない。
+
 ## 5. Samples
 
 ### D3D11
@@ -173,6 +175,7 @@ test_d3d12_pooled_converter_device
 test_d3d12_dummy_capture_sync_integration
 test_d3d12_synthetic_source_sync_integration
 test_d3d12_dynamic_output_lifecycle
+test_d3d12_dynamic_output_hardware_acceptance
 test_d3d12_shader_compile
 test_d3d12_multi_camera_pipeline_e2e
 test_d3d12_hardware_trigger_pipeline_smoke
@@ -205,7 +208,26 @@ FramePool exhaustion    0 / 0
 maximum host pair diff  3.5564 ms
 ```
 
-これは固定output構成の定常安定性を確認する。dynamic output lifecycleの実camera反復は未検証である。
+固定output構成では30分間の定常安定性を確認済みである。
+
+### D3D12 dynamic-output acceptance
+
+```text
+cameras                     2
+resolution                  1536 x 1536
+trigger                     hardware, 160 Hz
+churn cycles                200
+permanent synchronized sets 1991
+permanent rate              159.988 fps
+camera reads                1991 / 1991
+late pushes after stop      0
+permanent output drops      0
+camera timeouts             0 / 0
+sync dropped / incomplete   0 / 0
+FramePool exhaustion        0 / 0
+```
+
+常設output Aを維持したままoutput Bを200回add/stop/closeしても、`stopOutputSupply()`復帰後のlate pushと他output/central workerへの障害波及が発生しないことを確認した。
 
 ## 8. Output lifecycle policy
 
@@ -242,9 +264,9 @@ resource destroy
 
 ## 10. Not implemented / incomplete
 
-### Source relocation
+### D3D12 internal normalization
 
-D3D12 public APIとCMake entryは`IC4Ext::D3D12`へ移行済みだが、一部実装本体が`include/IC4Ext/V2` / `src/V2`に残る。
+source-tree top-levelのV2 pathは整理済みだが、3つの移動済みimplementation bodyは挙動を変えないため、内部で歴史的な`V2` namespace tokenと旧include名をまだ使用する。これらは`src/D3D12/Detail`内のprivate forwardingで吸収しており、public API/install headerには露出しない。完全なtoken/include正規化は任意の内部cleanupとして分離する。
 
 ### Diagnostics
 
@@ -285,14 +307,11 @@ D3D12-D3D11 shared resource interop
 ## 11. Recommended next steps
 
 ```text
-1. Windows/MSVCでD3D11/D3D12 dynamic output lifecycle testをbuild/run
-2. fixed-output regression testsを再実行
-3. D3D12実camera 160 fps中にdynamic output add/stop/closeを反復
-4. D3D11実cameraでpool/timestamp tuningとlong-run acceptance
-5. D3D12 implementation bodyをV2 pathから物理移動
-6. pair timestamp delta diagnostics追加
-7. device removal / timeout failure tests
-8. 必要に応じてformat/interop拡張
+1. D3D11実cameraで160 fps hardware-trigger smokeとlong-run acceptance
+2. pair timestamp delta diagnostics追加
+3. device removal / timeout failure tests
+4. 必要に応じてD3D12 Detail内のV2 token/includeを完全正規化
+5. 必要に応じてformat/interop拡張
 ```
 
 ## 12. Authoritative documents
@@ -306,5 +325,6 @@ samples/MultiPipelineStressD3D11/README.md
 docs/d3d12/READONLY_PIPELINE.md
 docs/d3d12/VALIDATION_AND_TUNING.md
 docs/d3d12/MULTI_CAMERA_PIPELINE_ACCEPTANCE.md
+docs/d3d12/DYNAMIC_OUTPUT_ACCEPTANCE.md
 samples/MultiPipelineStressD3D12/README.md
 ```
