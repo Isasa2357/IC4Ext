@@ -160,6 +160,8 @@ Signal
 
 この方式は安全性を優先する。複数consumerは独立buffer/cacheを持てるが、同じimmediate context上のmulti-call transactionは直列化される。
 
+2台・1536x1536・160 fps hardware triggerの実機acceptanceでは、この直列化を含む現行経路で30分間159.998 synchronized fpsを維持し、timeout、drop、FramePool exhaustionはいずれも0だった。
+
 ## 8. CameraCapture
 
 新しいconsumer-facing APIは`IC4Ext::D3D11::CameraCapture`である。
@@ -304,9 +306,14 @@ test_d3d11_readonly_pipeline
 test_d3d11_pooled_converter_device
 test_d3d11_synthetic_source_sync_integration
 test_d3d11_dynamic_output_lifecycle
+test_d3d11_multi_camera_pipeline_e2e
+test_d3d11_hardware_trigger_pipeline_smoke
+test_d3d11_160fps_long_run_acceptance
 ```
 
 `test_d3d11_dynamic_output_lifecycle`は、常設outputを動作させたまま動的outputの追加、同期供給停止、drain/clear、channel closeを200回繰り返す。供給停止後のlate pushがなく、1 outputのfaultが中央syncや常設outputへ波及しないことを確認する。
+
+実camera acceptanceの手順・合格条件・2026-08-16の実測値は`MULTI_CAMERA_PIPELINE_ACCEPTANCE.md`を参照する。
 
 最初はD3D11-onlyでbuildする。
 

@@ -1,1 +1,0 @@
-D3D12 implementation bodies are physically located under this Detail directory. Historical V2 include/token compatibility is private to this directory and is not a public API.

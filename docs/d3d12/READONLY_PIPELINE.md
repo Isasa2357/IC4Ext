@@ -30,7 +30,7 @@ Pipe::ReadOnlyFrameLifetimeTracker
 Pipe::ReadOnlyFrameSource
 ```
 
-`V2`は機能名ではないためpublic namespaceとして使用しない。public headerは`include/IC4Ext/D3D12`、通常のtranslation unitと実装detailは`src/D3D12`に置く。source tree top-levelの`include/IC4Ext/V2` / `src/V2`は使用しない。
+`V2`は機能名ではないためpublic namespaceとして使用しない。一部の実装本体は物理移動の途中で`include/IC4Ext/V2`または`src/V2`に残るが、public APIとCMake build entryは`IC4Ext::D3D12`である。
 
 ## 2. Compatibility policy
 
@@ -447,12 +447,9 @@ test_d3d12_dynamic_output_lifecycle
 test_d3d12_multi_camera_pipeline_e2e
 test_d3d12_hardware_trigger_pipeline_smoke
 test_d3d12_160fps_long_run_acceptance
-test_d3d12_dynamic_output_hardware_acceptance
 ```
 
-2台・1536x1536・hardware trigger・160 fpsの30分固定output試験では287,997同期set、159.998 fps、camera timeout、sync drop、output drop、FramePool exhaustionすべて0を確認した。
-
-動的output試験では常設output Aを159.988 fpsで維持しながらoutput Bを200回add/stop/closeし、`stopOutputSupply()`復帰後のlate push 0、permanent output drop 0、camera timeout 0、sync drop/incomplete 0、FramePool exhaustion 0を確認した。
+2台・1536x1536・hardware trigger・160 fpsの30分試験では287,997同期set、159.998 fps、camera timeout、sync drop、output drop、FramePool exhaustionすべて0を確認した。
 
 ## 20. Samples
 
@@ -468,7 +465,6 @@ MultiPipelineStressD3D12
 samples/MultiPipelineStressD3D12/README.md
 docs/d3d12/VALIDATION_AND_TUNING.md
 docs/d3d12/MULTI_CAMERA_PIPELINE_ACCEPTANCE.md
-docs/d3d12/DYNAMIC_OUTPUT_ACCEPTANCE.md
 ```
 
 ## 21. Dependency policy
@@ -484,8 +480,9 @@ OpenCVは一部sampleだけの依存であり、IC4Ext library本体の依存で
 
 ## 22. Remaining work
 
-1. pair timestamp deltaのp50/p95/p99/maxをlibrary統計へ追加する。
-2. device removal、DRED、fence timeoutのfailure pathを試験する。
-3. 3つの`src/D3D12/Detail` implementation bodyに残る歴史的な`V2` token/includeを必要に応じて完全正規化する。
-4. 10/12/16bit、packed Bayer、YUV/NV12等を必要に応じて追加する。
-5. D3D12-D3D11 interopを必要に応じて実装する。
+1. `include/IC4Ext/V2`と`src/V2`に残る実装本体を通常のD3D12 pathへ物理移動する。
+2. dynamic output lifecycleを実camera 160 fps中にも反復するacceptance testを追加する。
+3. pair timestamp deltaのp50/p95/p99/maxをlibrary統計へ追加する。
+4. device removal、DRED、fence timeoutのfailure pathを試験する。
+5. 10/12/16bit、packed Bayer、YUV/NV12等を必要に応じて追加する。
+6. D3D12-D3D11 interopを必要に応じて実装する。

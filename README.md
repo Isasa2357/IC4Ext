@@ -74,7 +74,7 @@ resizeやその他の画像処理が必要なconsumerは、入力TextureをReadO
 
 v1 physical-copy fan-out APIとのsource compatibilityは保証しない。新規コードは`IC4Ext::D3D11`または`IC4Ext::D3D12`のReadOnly APIを使う。
 
-D3D12のpublic headerと通常build pathは`include/IC4Ext/D3D12` / `src/D3D12`配下に整理済みであり、source tree top-levelの`include/IC4Ext/V2` / `src/V2`は使用しない。3つの現役実装bodyは`src/D3D12/Detail`へ置き、旧internal include名だけをprivate forwarding headerで吸収する。
+D3D12実装の一部は物理移動途中で`include/IC4Ext/V2` / `src/V2`に残るが、public APIとCMake build entryではない。
 
 ## 3. Current implementation status
 
@@ -96,9 +96,9 @@ D3D12のpublic headerと通常build pathは`include/IC4Ext/D3D12` / `src/D3D12`�
 | IC4 JSON / runtime property setters | 実装済み | 実装済み |
 | Chunk metadata / performance snapshot | 実装済み | 実装済み |
 | 10/12/16bit and packed formats | 未実装 | 未実装 |
-| 2-camera 160 fps long-run acceptance | 未検証 | 実機検証済み（1536x1536、hardware trigger、30分、159.998 fps） |
+| 2-camera 160 fps long-run acceptance | 実機検証済み（1536x1536、hardware trigger、30分、159.998 fps） | 実機検証済み（1536x1536、hardware trigger、30分、159.998 fps） |
 
-D3D12 acceptanceの手順と合格条件は[`docs/d3d12/MULTI_CAMERA_PIPELINE_ACCEPTANCE.md`](docs/d3d12/MULTI_CAMERA_PIPELINE_ACCEPTANCE.md)を参照する。
+D3D11 acceptanceの手順と実測結果は[`docs/d3d11/MULTI_CAMERA_PIPELINE_ACCEPTANCE.md`](docs/d3d11/MULTI_CAMERA_PIPELINE_ACCEPTANCE.md)、D3D12 acceptanceの手順と合格条件は[`docs/d3d12/MULTI_CAMERA_PIPELINE_ACCEPTANCE.md`](docs/d3d12/MULTI_CAMERA_PIPELINE_ACCEPTANCE.md)を参照する。
 
 動画encoderはcamera GPU resource提供libraryであるIC4Ext本体の責務に含めない。OpenCV `VideoWriter`はstress sampleのconsumer workloadである。
 
@@ -336,6 +336,7 @@ docs/READONLY_FRAME_USAGE.md
 docs/OUTPUT_LIFECYCLE.md
 docs/V2_PIPELINE_POLICY.md
 docs/d3d11/READONLY_PIPELINE.md
+docs/d3d11/MULTI_CAMERA_PIPELINE_ACCEPTANCE.md
 docs/d3d12/READONLY_PIPELINE.md
 docs/d3d12/MULTI_CAMERA_PIPELINE_ACCEPTANCE.md
 samples/MultiPipelineStressD3D11/README.md
