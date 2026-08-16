@@ -65,20 +65,23 @@ cmake --build out\build\d3d11_v2_acceptance ^
 
 目的は、2 x `CameraCaptureThread -> FrameSyncThread -> ReadOnlyFrameSet`という現行D3D11 v2経路が最後まで動作することの確認である。
 
+CTestはfree-runの主要値を明示的に固定するため、以前のhardware acceptance用環境変数がshellに残っていても、このtestのFPS、expected FPS、warmup、targetへ影響しない。
+
 標準設定:
 
 ```text
 30 fps request
+30 fps expected (reporting)
 20 warmup sets
 100 measured sets
 20 ms host timestamp tolerance
+minimum rate ratio 0
 ```
 
 ```bat
 set "IC4EXT_TEST_CAMERA0_DEVICE=0"
 set "IC4EXT_TEST_CAMERA1_DEVICE=1"
 set "IC4EXT_TEST_FORMAT=BGR8"
-set "IC4EXT_TEST_FPS=30"
 set "IC4EXT_TEST_ENABLE_D3D11_HW_ACCEPTANCE="
 set "IC4EXT_TEST_ENABLE_D3D11_LONG_RUN_ACCEPTANCE="
 
@@ -244,3 +247,50 @@ warmup完了時のstatsをbaselineにするため、trigger開始前やstartup�
 ```
 
 途中経過は5秒ごとに表示する。
+
+## 8. Validated results — 2026-08-16
+
+### 8.1 30 fps free-run
+
+2台の実cameraで1000 synchronized setsを測定した。
+
+```text
+requested rate            30 fps
+measured sets             1000
+measured time             33.294 s
+observed synchronized FPS 30.035 fps
+camera reads              1000 / 1000
+camera timeouts           0 / 0
+sync input                2000
+sync dropped              0
+sync incomplete           0
+output drops              0
+output dispatch errors    0
+FramePool exhaustion      0 / 0
+maximum host pair diff    18.8147 ms (< 20 ms tolerance)
+mean host pair diff       18.3920 ms
+```
+
+この実行時はshellに以前のhardware acceptance用`IC4EXT_TEST_EXPECTED_FPS=160`、warmup、target等が残っていたため表示値へ混入した。free-runの合否判定ではlong-runのrate thresholdを使用しないため実測結果は有効である。再現性改善としてCTest定義をself-containedに変更し、free-runでは30 fps / expected 30 fps / warmup 20 / target 100 / minimum rate ratio 0を明示的に上書きする。
+
+### 8.2 160 fps long-run
+
+2台・1536x1536・BayerRG8・Line1 hardware triggerで30分間測定し、正式acceptanceを通過した。
+
+```text
+measurement               1800.000 s
+synchronized sets         287,997
+observed synchronized FPS 159.998 fps
+camera reads              287,997 / 287,997
+camera timeouts           0 / 0
+sync input                575,994
+sync dropped              0
+sync incomplete           0
+output drops              0
+output dispatch errors    0
+FramePool exhaustion      0 / 0
+maximum host pair diff    3.7468 ms (< 4 ms tolerance)
+mean host pair diff       23.416 us
+```
+
+30分runは同じlong-run hardware-trigger経路を60秒dry-runより長く実行しているため60秒安定性・性能gateを包含する。また1000-set hardware smokeよりも長時間・高set数で同じcamera/sync/output経路を通している。
