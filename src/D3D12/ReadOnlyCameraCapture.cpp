@@ -1,5 +1,5 @@
 #include "../Core/IC4SdkCompatibility.hpp"
 
 #define V2 D3D12
-#include "../V2/D3D12/D3D12CameraCapture.cpp"
+#include "Detail/D3D12CameraCaptureImpl.inc"
 #undef V2
