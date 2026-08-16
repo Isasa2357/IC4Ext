@@ -58,6 +58,12 @@ public:
             return 0;
         }
 
+        // Removing an output is a dispatch barrier. Once this function returns,
+        // no in-flight dispatch can still hold a snapshot containing the removed
+        // queue. This is required before callers close or destroy the queue,
+        // especially when copied D3D12 resources may still be referenced by the
+        // current dispatch.
+        std::lock_guard<std::mutex> dispatchLock(dispatchMutex_);
         std::lock_guard<std::mutex> lock(outputMutex_);
         std::size_t removedCount = 0;
         for (auto it = outputs_.begin(); it != outputs_.end();) {
@@ -73,6 +79,9 @@ public:
 
     std::size_t clearOutputQueues()
     {
+        // Match removeOutputQueue(): after return, no dispatch can still target
+        // any of the retired queues.
+        std::lock_guard<std::mutex> dispatchLock(dispatchMutex_);
         std::lock_guard<std::mutex> lock(outputMutex_);
         const std::size_t removedCount = outputs_.size();
         outputs_.clear();
@@ -242,6 +251,10 @@ private:
     std::unique_ptr<D3D12FenceManager> copyFenceManager_;
     D3D12FrameCopier copier_;
 
+    // dispatchMutex_ serializes output retirement with an entire dispatch. The
+    // output list itself remains protected separately so registration and
+    // introspection do not need to hold the dispatch barrier.
+    mutable std::mutex dispatchMutex_;
     mutable std::mutex outputMutex_;
     std::vector<OutputBinding> outputs_;
     std::uint64_t dispatchedFrameCount_ = 0;
